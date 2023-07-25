@@ -35,6 +35,25 @@ Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t 
     test_input.resize(notify_size * 2);
 }
 
+Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part)
+{
+    dig = dig_;
+    segment_size = dig->getSegmentSize();
+    batch_size = batch;
+    this->setAveragesNumber(averages);
+    notify_size = 2 * segment_size * batch_size;
+    dig->handleError();
+    dig->setTimeout(5000);  // ms
+    processor = new dsp(segment_size, batch_size, part);
+    this->initializeBuffer();
+
+    func = [this](int8_t* data) mutable { this->processor->compute(data); };
+
+    int trace_length = processor->getTraceLength();
+
+    test_input.resize(notify_size * 2);
+}
+
 void Measurement::initializeBuffer()
 {
     // Create the buffer in page-locked memory

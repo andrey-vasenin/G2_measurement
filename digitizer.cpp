@@ -35,7 +35,10 @@ Digitizer::Digitizer(void* h)
 // Digitizer destructor
 Digitizer::~Digitizer() {
     if (created_here)
+    {
         spcm_vClose(handle);
+        handle = nullptr;
+    }
 }
 
 // private method to use with initializer
@@ -168,6 +171,7 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
 
     while (i < n) {
         auto err = spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_DATA_WAITDMA);
+        std::cout << err << std::endl;
         /* Since the transfer speed is slower than the acquisition speed, an error ERR_FIFOHWOVERRUN (hardware buffer overrun)
         may occur. The following exception handling restarts the measurement. */
         try
@@ -176,8 +180,9 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
         }
         catch (const std::exception exc)
         {
-            if (err == ERR_FIFOHWOVERRUN)
+            switch (err)
             {
+            case ERR_FIFOHWOVERRUN:
 #ifdef _DEBUG
                 std::cerr << exc.what() << std::endl;
 #endif // _DEBUG
@@ -187,9 +192,11 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
                 this->handleError();
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
                 continue;
-            }
-            else
-            {
+            case ERR_TIMEOUT:
+                std::cerr << exc.what() << std::endl;
+                i = n;
+                break;
+            default:
                 throw exc;
             }
         }
@@ -223,4 +230,10 @@ void Digitizer::handleError() {
 void Digitizer::stopCard() {
     spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_STOP);
     this->handleError();
+}
+
+int64_t Digitizer::getTriggerCounter() {
+    int64_t trigcount;
+    spcm_dwGetParam_i64(handle, SPC_TRIGGERCOUNTER, &trigcount);
+    return trigcount;
 }

@@ -34,6 +34,8 @@ private:
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part);
 
+    Measurement(Digitizer *dig, uint64_t averages, uint64_t batch, double part);
+
     void setAmplitude(int ampl);
 
     void setAveragesNumber(uint64_t averages);

@@ -66,12 +66,13 @@ dsp::dsp(size_t len, uint64_t n, double part) : trace_length{static_cast<size_t>
                                        out_size{trace_length * trace_length},
                                        trace1_start{0},       // Start of the signal data
                                        trace2_start{len / 2}, // Start of the noise data
-                                       pitch{len},            // Segment length in a buffer
-                                       A_gpu(2 * total_length), C_gpu(total_length),
-                                       firwin(total_length), // GPU memory for the filtering window
-                                       subtraction_trace(total_length, tcf(0.f)),
-                                       downconversion_coeffs(total_length)
+                                       pitch{len}           // Segment length in a buffer
+                                       
 {
+    firwin.resize(total_length); // GPU memory for the filtering window
+    subtraction_trace.resize(total_length);
+    thrust::fill(subtraction_trace.begin(), subtraction_trace.end(), tcf(0.f));
+    downconversion_coeffs.resize(total_length);
     // Streams
     for (int i = 0; i < num_streams; i++)
     {
@@ -129,8 +130,6 @@ dsp::~dsp()
         // Destroy GPU streams
         handleError(cudaStreamDestroy(streams[i]));
     }
-
-    cudaDeviceReset();
 }
 
 // Creates a rectangular window with specified cutoff frequencies for the further usage in a filter
@@ -169,11 +168,13 @@ void dsp::setIntermediateFrequency(float frequency, int oversampling)
 {
     const float pi = std::acos(-1.f);
     float ovs = static_cast<float>(oversampling);
-    thrust::tabulate(downconversion_coeffs.begin(), downconversion_coeffs.end(),
-        [=] __device__ (int i) {
+    hostvec_c hDownConv(total_length);
+    thrust::tabulate(hDownConv.begin(), hDownConv.end(),
+        [=] __host__ (int i) -> tcf {
             float t = 0.8 * ovs * static_cast<float>(i % trace_length);
             return thrust::exp(tcf(0, -2 * pi * frequency * t));
         });
+    downconversion_coeffs = hDownConv;
 }
 
 void dsp::downconvert(gpuvec_c data, cudaStream_t& stream)
@@ -225,30 +226,30 @@ void dsp::compute(const int8_t* buffer_ptr)
     convertDataToMillivolts(noise[stream_num], gpu_buf2[stream_num], streams[stream_num]);
     applyDownConversionCalibration(data[stream_num], data_calibrated[stream_num], streams[stream_num]);
     applyDownConversionCalibration(noise[stream_num], noise_calibrated[stream_num], streams[stream_num]);
-    applyFilter(data_calibrated[stream_num], firwin, stream_num);
-    applyFilter(noise_calibrated[stream_num], firwin, stream_num);
-    downconvert(data_calibrated[stream_num], streams[stream_num]);
-    downconvert(noise_calibrated[stream_num], streams[stream_num]);
-    subtractDataFromOutput(subtraction_trace, data_calibrated[stream_num], streams[stream_num]);
+    //applyFilter(data_calibrated[stream_num], firwin, stream_num);
+    //applyFilter(noise_calibrated[stream_num], firwin, stream_num);
+    //downconvert(data_calibrated[stream_num], streams[stream_num]);
+    //downconvert(noise_calibrated[stream_num], streams[stream_num]);
+    //subtractDataFromOutput(subtraction_trace, data_calibrated[stream_num], streams[stream_num]);
 
     calculateField(data_calibrated[stream_num], noise_calibrated[stream_num],
         field[stream_num], streams[stream_num]);
     calculatePower(data_calibrated[stream_num], noise_calibrated[stream_num],
         power[stream_num], streams[stream_num]);
-    calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
-        out[stream_num], cublas_handles[stream_num]);
+    //calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
+    //    out[stream_num], cublas_handles[stream_num]);
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
 void dsp::loadDataToGPUwithPitchAndOffset(const int8_t* buffer_ptr,
     gpubuf& gpu_buf, size_t pitch, size_t offset, int stream_num)
 {
-    size_t width = 2 * size_t(trace_length) * sizeof(Npp8s);
-    size_t src_pitch = 2 * pitch * sizeof(Npp8s);
+    size_t width = 2 * size_t(trace_length) * sizeof(int8_t);
+    size_t src_pitch = 2 * pitch * sizeof(int8_t);
     size_t dst_pitch = width;
     size_t shift = 2 * offset;
-    handleError(cudaMemcpy2DAsync(get(gpu_buf), dst_pitch,
-                                  buffer_ptr + shift, src_pitch, width, batch_size,
+    handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(gpu_buf.data()), dst_pitch,
+                                  static_cast<const void*>(buffer_ptr + shift), src_pitch, width, batch_size,
                                   cudaMemcpyHostToDevice, streams[stream_num]));
 }
 

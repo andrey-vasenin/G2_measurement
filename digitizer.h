@@ -20,7 +20,7 @@ class Digitizer {
     int8_t* buffer;
     size_t buffersize;
     char errortext[ERRORTEXTLEN];
-    bool created_here = true;
+    bool created_here = false;
 
     void loadProperties();
 
@@ -80,6 +80,8 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const Digitizer& dig) {
         return out << "digitizer in PXIe slot #" << dig.slot;
     };
+
+    int64_t getTriggerCounter();
 };
 
 #endif //CPPMEASUREMENT_DIGITIZER_H

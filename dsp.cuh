@@ -35,7 +35,7 @@ typedef std::vector<std::complex<float>> stdvec_c;
 template <typename T>
 inline T *get(thrust::device_vector<T> vec)
 {
-    return thrust::raw_pointer_cast(&vec[0]);
+    return thrust::raw_pointer_cast(vec.data());
 }
 
 template <typename T>
@@ -82,7 +82,7 @@ private:
     /* Useful variables */
     size_t trace_length; // for keeping the length of a trace
     size_t trace1_start, trace2_start, pitch;
-    uint64_t batch_size;   // for keeping the number of segments in data array
+    size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
     size_t total_length; // batch_size * trace_length
     size_t out_size;
     int semaphore = 0;                           // for selecting the current stream
