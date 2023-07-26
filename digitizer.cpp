@@ -171,7 +171,6 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
 
     while (i < n) {
         auto err = spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_DATA_WAITDMA);
-        std::cout << err << std::endl;
         /* Since the transfer speed is slower than the acquisition speed, an error ERR_FIFOHWOVERRUN (hardware buffer overrun)
         may occur. The following exception handling restarts the measurement. */
         try

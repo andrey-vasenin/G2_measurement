@@ -365,3 +365,4 @@ FodyWeavers.xsd
 c_header
 old_files/
 *.bat
+*.dll

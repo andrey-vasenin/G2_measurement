@@ -19,6 +19,7 @@
 #include "strided_range.cuh"
 #include <thrust/complex.h>
 #include <thrust/transform.h>
+#include <thrust/async/transform.h>
 #include <thrust/tabulate.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sequence.h>
@@ -57,6 +58,20 @@ inline void check_npp_error(NppStatus err, std::string &&msg)
 #endif // NDEBUG
 }
 
+template <typename T> 
+inline void print_vector(thrust::device_vector<T> & vec, int n) 
+{
+    cudaDeviceSynchronize();
+    thrust::copy(vec.begin(), vec.begin() + n, std::ostream_iterator<T>(std::cout, " "));
+    std::cout << std::endl;
+}
+
+inline void print_gpu_buff(gpubuf vec, int n)
+{
+    cudaDeviceSynchronize();
+    thrust::copy(vec.begin(), vec.begin() + n, std::ostream_iterator<int>(std::cout, " "));
+    std::cout << std::endl;
+}
 
 
 // DSP constructor
@@ -222,7 +237,7 @@ void dsp::compute(const int8_t* buffer_ptr)
     switchStream();
     loadDataToGPUwithPitchAndOffset(buffer_ptr, gpu_buf[stream_num], pitch, trace1_start, stream_num);
     loadDataToGPUwithPitchAndOffset(buffer_ptr, gpu_buf2[stream_num], pitch, trace2_start, stream_num);
-    convertDataToMillivolts(data[stream_num], gpu_buf[stream_num], streams[stream_num]);
+    convertDataToMillivolts(data[stream_num], gpu_buf[stream_num], streams[stream_num]); // error is here
     convertDataToMillivolts(noise[stream_num], gpu_buf2[stream_num], streams[stream_num]);
     applyDownConversionCalibration(data[stream_num], data_calibrated[stream_num], streams[stream_num]);
     applyDownConversionCalibration(noise[stream_num], noise_calibrated[stream_num], streams[stream_num]);
@@ -254,11 +269,11 @@ void dsp::loadDataToGPUwithPitchAndOffset(const int8_t* buffer_ptr,
 }
 
 // Converts bytes into 32-bit floats with mV dimensionality
-void dsp::convertDataToMillivolts(gpuvec_c data, gpubuf gpu_buf, cudaStream_t &stream)
+void dsp::convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t &stream)
 {
     strided_range<gpubuf::iterator> channelI(gpu_buf.begin(), gpu_buf.end(), 2);
     strided_range<gpubuf::iterator> channelQ(gpu_buf.begin() + 1, gpu_buf.end(), 2);
-    thrust::transform(thrust::cuda::par.on(stream),
+    thrust::transform(thrust::device.on(stream),
         channelI.begin(), channelI.end(), channelQ.begin(), data.begin(), millivolts_functor(scale));
 }
 
@@ -296,7 +311,7 @@ void dsp::subtractDataFromOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t 
 }
 
 // Calculates the field from the data in the GPU memory
-void dsp::calculateField(gpuvec_c data, gpuvec_c noise, gpuvec_c output, cudaStream_t &stream)
+void dsp::calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cudaStream_t &stream)
 {
     thrust::for_each(thrust::cuda::par.on(stream),
         thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
@@ -305,7 +320,7 @@ void dsp::calculateField(gpuvec_c data, gpuvec_c noise, gpuvec_c output, cudaStr
 }
 
 // Calculates the power from the data in the GPU memory
-void dsp::calculatePower(gpuvec_c data, gpuvec_c noise, gpuvec output, cudaStream_t& stream)
+void dsp::calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream)
 {
     thrust::for_each(thrust::cuda::par.on(stream),
         thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
@@ -313,7 +328,7 @@ void dsp::calculatePower(gpuvec_c data, gpuvec_c noise, gpuvec output, cudaStrea
         thrust::make_zip_function(power_functor()));
 }
 
-void dsp::calculateG1(gpuvec_c data, gpuvec_c noise, gpuvec_c output, cublasHandle_t &handle)
+void dsp::calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle)
 {
     using namespace std::string_literals;
 

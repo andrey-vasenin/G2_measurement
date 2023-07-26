@@ -157,7 +157,7 @@ protected:
     void loadDataToGPUwithPitchAndOffset(const int8_t* buffer_ptr,
         gpubuf & gpu_buf, size_t pitch, size_t offset, int stream_num);
 
-    void convertDataToMillivolts(gpuvec_c data, gpubuf gpu_buf, cudaStream_t& stream);
+    void convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t& stream);
 
     void downconvert(gpuvec_c data, cudaStream_t& stream);
 
@@ -169,11 +169,11 @@ protected:
 
     void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num);
 
-    void calculateField(gpuvec_c data, gpuvec_c noise, gpuvec_c output, cudaStream_t& stream);
+    void calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cudaStream_t& stream);
 
-    void calculatePower(gpuvec_c data, gpuvec_c noise, gpuvec output, cudaStream_t& stream);
+    void calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream);
 
-    void calculateG1(gpuvec_c data, gpuvec_c noise, gpuvec_c output, cublasHandle_t &handle);
+    void calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH
