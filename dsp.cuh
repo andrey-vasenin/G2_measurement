@@ -66,6 +66,7 @@ class dsp
     gpuvec power[num_streams];   // arrays for storage of average power
     gpuvec_c field[num_streams]; // arrays for storage of average field
     gpuvec_c out[num_streams];
+    gpuvec spectrum[num_streams];
 
     uint32_t cnt = 0;
 
@@ -129,6 +130,8 @@ public:
 
     void getCumulativePower(hostvec &result);
 
+    void getCumulativeSpectrum(hostvec& result);
+
     void getCumulativeField(hostvec_c &result);
 
     void getCorrelator(hostvec_c &result);
@@ -174,6 +177,8 @@ protected:
     void calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream);
 
     void calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle);
+
+    void calculateTriplets(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

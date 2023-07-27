@@ -23,6 +23,7 @@ PYBIND11_MODULE(g2measurement, m) {
         .def("get_mean_field", &Measurement::getMeanField, OUTPUTON)
         .def("get_mean_power", &Measurement::getMeanPower, OUTPUTON)
         .def("get_correlator", &Measurement::getCorrelator, OUTPUTON)
+        .def("get_spectrum", &Measurement::getMeanSpectrum, OUTPUTON)
         .def("get_raw_correlator", &Measurement::getRawCorrelator, OUTPUTON)
         .def("reset", &Measurement::reset, OUTPUTON)
         .def("reset_output", &Measurement::resetOutput, OUTPUTON)

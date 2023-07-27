@@ -99,12 +99,13 @@ dsp::dsp(size_t len, uint64_t n, double part) : trace_length{static_cast<size_t>
         // Allocate arrays on GPU for every stream
         gpu_buf[i].resize(2 * total_length);
         gpu_buf2[i].resize(2 * total_length);
-        data[i].resize(2 * total_length);
-        noise[i].resize(2 * total_length);
-        data_calibrated[i].resize(2 * total_length);
-        noise_calibrated[i].resize(2 * total_length);
-        power[i].resize(2 * total_length);
-        field[i].resize(2 * total_length);
+        data[i].resize(total_length);
+        noise[i].resize(total_length);
+        data_calibrated[i].resize(total_length);
+        noise_calibrated[i].resize(total_length);
+        power[i].resize(total_length);
+        spectrum[i].resize(total_length);
+        field[i].resize(total_length);
         out[i].resize(out_size);
 
         // Initialize cuFFT plans
@@ -194,7 +195,7 @@ void dsp::setIntermediateFrequency(float frequency, int oversampling)
 
 void dsp::downconvert(gpuvec_c data, cudaStream_t& stream)
 {
-    thrust::transform(thrust::cuda::par.on(stream), data.begin(), data.end(), downconversion_coeffs.begin(), data.begin(), thrust::multiplies<tcf>());
+    thrust::transform(thrust::cuda::par_nosync.on(stream), data.begin(), data.end(), downconversion_coeffs.begin(), data.begin(), thrust::multiplies<tcf>());
 }
 
 void dsp::setDownConversionCalibrationParameters(float r, float phi,
@@ -210,7 +211,7 @@ void dsp::setDownConversionCalibrationParameters(float r, float phi,
 // Applies down-conversion calibration to traces
 void dsp::applyDownConversionCalibration(gpuvec_c& data, gpuvec_c& data_calibrated, cudaStream_t &stream)
 {
-    auto sync_exec_policy = thrust::cuda::par.on(stream);
+    auto sync_exec_policy = thrust::cuda::par_nosync.on(stream);
     thrust::transform(sync_exec_policy, data.begin(), data.end(), data_calibrated.begin(), calibration_functor(a_qi, a_qq, c_i, c_q));
 }
 
@@ -241,18 +242,20 @@ void dsp::compute(const int8_t* buffer_ptr)
     convertDataToMillivolts(noise[stream_num], gpu_buf2[stream_num], streams[stream_num]);
     applyDownConversionCalibration(data[stream_num], data_calibrated[stream_num], streams[stream_num]);
     applyDownConversionCalibration(noise[stream_num], noise_calibrated[stream_num], streams[stream_num]);
-    //applyFilter(data_calibrated[stream_num], firwin, stream_num);
-    //applyFilter(noise_calibrated[stream_num], firwin, stream_num);
-    //downconvert(data_calibrated[stream_num], streams[stream_num]);
-    //downconvert(noise_calibrated[stream_num], streams[stream_num]);
-    //subtractDataFromOutput(subtraction_trace, data_calibrated[stream_num], streams[stream_num]);
+    applyFilter(data_calibrated[stream_num], firwin, stream_num);
+    applyFilter(noise_calibrated[stream_num], firwin, stream_num);
+    downconvert(data_calibrated[stream_num], streams[stream_num]);
+    downconvert(noise_calibrated[stream_num], streams[stream_num]);
+    subtractDataFromOutput(subtraction_trace, data_calibrated[stream_num], streams[stream_num]);
 
     calculateField(data_calibrated[stream_num], noise_calibrated[stream_num],
         field[stream_num], streams[stream_num]);
     calculatePower(data_calibrated[stream_num], noise_calibrated[stream_num],
         power[stream_num], streams[stream_num]);
-    //calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
-    //    out[stream_num], cublas_handles[stream_num]);
+    calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
+        out[stream_num], cublas_handles[stream_num]);
+    calculateTriplets(data_calibrated[stream_num], noise_calibrated[stream_num],
+        spectrum[stream_num], stream_num);
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
@@ -273,7 +276,7 @@ void dsp::convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t 
 {
     strided_range<gpubuf::iterator> channelI(gpu_buf.begin(), gpu_buf.end(), 2);
     strided_range<gpubuf::iterator> channelQ(gpu_buf.begin() + 1, gpu_buf.end(), 2);
-    thrust::transform(thrust::device.on(stream),
+    thrust::transform(thrust::cuda::par_nosync.on(stream),
         channelI.begin(), channelI.end(), channelQ.begin(), data.begin(), millivolts_functor(scale));
 }
 
@@ -281,17 +284,17 @@ void dsp::convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t 
 void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num)
 {
     // Step 1. Take FFT of each segment
-    cufftComplex *cufft_data = reinterpret_cast<cufftComplex *>(get(data));
+    cufftComplex *cufft_data = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(data.data()));
     auto cufftstat = cufftExecC2C(plans[stream_num], cufft_data, cufft_data, CUFFT_FORWARD);
     check_cufft_error(cufftstat, "Error executing cufft");
     // Step 2. Multiply each segment by a window
-    thrust::transform(thrust::cuda::par.on(streams[stream_num]),
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
         data.begin(), data.end(), window.begin(), data.begin(), thrust::multiplies<tcf>());
     // Step 3. Take inverse FFT of each segment
     cufftExecC2C(plans[stream_num], cufft_data, cufft_data, CUFFT_INVERSE);
     check_cufft_error(cufftstat, "Error executing cufft");
     // Step 4. Normalize the FFT for the output to equal the input
-    thrust::transform(thrust::cuda::par.on(streams[stream_num]),
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
         data.begin(), data.end(), thrust::constant_iterator<tcf>(1.f / static_cast<float>(trace_length)),
         data.begin(), thrust::multiplies<tcf>());
 }
@@ -299,21 +302,21 @@ void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num)
 // Sums newly processed data with previous data for averaging
 void dsp::addDataToOutput(gpuvec_c &data, gpuvec_c &output, cudaStream_t& stream)
 {
-    thrust::transform(thrust::cuda::par.on(stream), output.begin(), output.end(), data.begin(),
+    thrust::transform(thrust::cuda::par_nosync.on(stream), output.begin(), output.end(), data.begin(),
         output.begin(), thrust::plus<tcf>());
 }
 
 // Subtracts newly processed data from previous data
 void dsp::subtractDataFromOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t &stream)
 {
-    thrust::transform(thrust::cuda::par.on(stream), output.begin(), output.end(), data.begin(),
+    thrust::transform(thrust::cuda::par_nosync.on(stream), output.begin(), output.end(), data.begin(),
         output.begin(), thrust::minus<tcf>());
 }
 
 // Calculates the field from the data in the GPU memory
 void dsp::calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cudaStream_t &stream)
 {
-    thrust::for_each(thrust::cuda::par.on(stream),
+    thrust::for_each(thrust::cuda::par_nosync.on(stream),
         thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
         thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
         thrust::make_zip_function(field_functor()));
@@ -322,7 +325,7 @@ void dsp::calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cuda
 // Calculates the power from the data in the GPU memory
 void dsp::calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream)
 {
-    thrust::for_each(thrust::cuda::par.on(stream),
+    thrust::for_each(thrust::cuda::par_nosync.on(stream),
         thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
         thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
         thrust::make_zip_function(power_functor()));
@@ -338,46 +341,74 @@ void dsp::calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasH
     // Compute correlation for the signal and add it to the output
     auto cublas_status = cublasCherk(handle,
                                      CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, trace_length, batch_size,
-                                     &alpha_data, reinterpret_cast<cuComplex *>(get(data)), trace_length,
-                                     &beta, reinterpret_cast<cuComplex *>(get(output)), trace_length);
+                                     &alpha_data, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data.data())), trace_length,
+                                     &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), trace_length);
     // Check for errors
     check_cublas_error(cublas_status,
         "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
     // Compute correlation for the noise and subtract it from the output
     cublas_status = cublasCherk(handle,
                                 CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, trace_length, batch_size,
-                                &alpha_noise, reinterpret_cast<cuComplex *>(get(noise)), trace_length,
-                                &beta, reinterpret_cast<cuComplex *>(get(output)), trace_length);
+                                &alpha_noise, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(noise.data())), trace_length,
+                                &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), trace_length);
     // Check for errors
     check_cublas_error(cublas_status,
         "Error of rank-1 update (noise) with code #"s + std::to_string(cublas_status));
 }
 
+void dsp::calculateTriplets(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num)
+{
+    cufftComplex* cufft_data = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(data.data()));
+    auto cufftstat1 = cufftExecC2C(plans[stream_num], cufft_data, cufft_data, CUFFT_FORWARD);
+    check_cufft_error(cufftstat1, "Error executing cufft");
+
+    cufftComplex* cufft_noise = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(noise.data()));
+    auto cufftstat2 = cufftExecC2C(plans[stream_num], cufft_noise, cufft_noise, CUFFT_FORWARD);
+    check_cufft_error(cufftstat2, "Error executing cufft");
+
+    thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
+        thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
+        thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
+        thrust::make_zip_function(power_functor()));
+}
+
 // Returns the average value
 void dsp::getCorrelator(hostvec_c &result)
 {
+    gpuvec_c c(out[0].size(), tcf(0));
     this->handleError(cudaDeviceSynchronize());
-    for (int i = 1; i < num_streams; i++)
-        thrust::transform(out[i].begin(), out[i].end(), out[0].begin(), out[0].begin(), thrust::plus<tcf>());
-    result = out[0];
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(out[i].begin(), out[i].end(), c.begin(), c.begin(), thrust::plus<tcf>());
+    result = c;
 }
 
 // Returns the cumulative power
 void dsp::getCumulativePower(hostvec &result)
 {
+    gpuvec p(total_length, 0);
     this->handleError(cudaDeviceSynchronize());
-    for (int i = 1; i < num_streams; i++)
-        thrust::transform(power[i].begin(), power[i].end(), power[0].begin(), power[0].begin(), thrust::plus<float>());
-    result = power[0];
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(power[i].begin(), power[i].end(), p.begin(), p.begin(), thrust::plus<float>());
+    result = p;
+}
+
+void dsp::getCumulativeSpectrum(hostvec& result)
+{
+    gpuvec s(total_length, 0);
+    this->handleError(cudaDeviceSynchronize());
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(spectrum[i].begin(), spectrum[i].end(), s.begin(), s.begin(), thrust::plus<float>());
+    result = s;
 }
 
 // Returns the cumulative field
 void dsp::getCumulativeField(hostvec_c &result)
 {
+    gpuvec_c f(field[0].size(), tcf(0));
     this->handleError(cudaDeviceSynchronize());
-    for (int i = 1; i < num_streams; i++)
-        thrust::transform(field[i].begin(), field[i].end(), field[0].begin(), field[0].begin(), thrust::plus<tcf>());
-    result = field[0];
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(field[i].begin(), field[i].end(), f.begin(), f.begin(), thrust::plus<tcf>());
+    result = f;
 }
 
 // Returns the useful length of the data in a segment

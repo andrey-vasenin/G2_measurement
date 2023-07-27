@@ -177,6 +177,31 @@ std::vector<double> Measurement::getMeanPower()
     return mean_power;
 }
 
+std::vector<double> Measurement::getMeanSpectrum()
+{
+    int len = processor->getTotalLength();
+    int tl = processor->getTraceLength();
+
+    hostvec spec_from_gpu(len);
+    processor->getCumulativeSpectrum(spec_from_gpu);
+
+    // Compute mean 
+    std::vector<double> mean_spec(tl, 0.);
+    double denominator{ 1 };
+    if (iters_done > 0)
+        denominator = static_cast<double>(iters_done * batch_size);
+    for (int j = 0; j < tl; j++)
+    {
+        for (int i = 0; i < batch_size; i++)
+        {
+            int idx = i * tl + j;
+            mean_spec[j] += spec_from_gpu[idx];
+        }
+        mean_spec[j] /= denominator;
+    }
+    return mean_spec;
+}
+
 
 std::vector <std::vector<std::complex<double>>> Measurement::getCorrelator()
 {

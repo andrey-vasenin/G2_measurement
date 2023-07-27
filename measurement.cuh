@@ -66,6 +66,8 @@ public:
 
     std::vector<double> getMeanPower();
 
+    std::vector<double> getMeanSpectrum();
+
     std::vector <std::vector<std::complex<double>>> getCorrelator();
     
     std::vector<std::complex<float>> getRawCorrelator();
