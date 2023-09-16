@@ -366,3 +366,4 @@ c_header
 old_files/
 *.bat
 *.dll
+eigen-3.4.0/

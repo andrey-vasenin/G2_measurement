@@ -52,5 +52,34 @@ struct power_functor
     }
 };
 
+struct abs_value_squared : public thrust::binary_function<tcf, float, float>
+{
+    __host__ __device__
+        float operator()(const tcf& x, const float& z)
+    {
+        return z + thrust::norm(x);
+    }
+};
+
+struct triplet_functor
+{
+    __host__ __device__
+        void operator()(const tcf& x, const tcf& y, float& z)
+    {
+        z += thrust::norm(x) - 2*thrust::norm(y);
+    }
+};
+
+
+
+struct taper_functor : public thrust::binary_function<tcf, float, tcf>
+{
+    __host__ __device__
+        tcf operator()(const tcf& data, const float& taper)
+    {
+        return data * taper;
+    }
+};
+
 
 #endif // !DSP_FUNCTORS_CUH

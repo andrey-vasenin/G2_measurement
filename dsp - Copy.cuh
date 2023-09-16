@@ -26,10 +26,9 @@ typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
 typedef thrust::device_vector<char> gpubuf;
-//typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
-//    thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
-//typedef hostbuf::iterator hostbuf_iter_t;
-typedef int8_t* hostbuf;
+typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
+    thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
+typedef hostbuf::iterator hostbuf_iter_t;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
 
@@ -57,8 +56,8 @@ class dsp
     hostbuf buffer;
 
     /* Pointers to arrays with data */
-    gpubuf gpu_data_buf[num_streams];  // buffers for loading data
-    gpubuf gpu_noise_buf[num_streams]; // buffers for loading data
+    gpubuf gpu_buf[num_streams];  // buffers for loading data
+    gpubuf gpu_buf2[num_streams]; // buffers for loading data
     gpuvec_c data[num_streams];
     gpuvec_c data_calibrated[num_streams];
     gpuvec_c data_fft[num_streams];
@@ -75,7 +74,9 @@ class dsp
     gpuvec_c field[num_streams]; // arrays for storage of average field
     gpuvec_c out[num_streams];
     gpuvec spectrum[num_streams];
-    gpuvec periodogram[num_streams];
+    gpuvec_c offs;
+
+    uint32_t cnt = 0;
 
     /* Filtering window */
     gpuvec_c firwin;
@@ -97,13 +98,6 @@ private:
     int semaphore = 0;                           // for selecting the current stream
     float scale = 500.f / 128.f; // for conversion into mV
 
-    /* Multitaper method properties */
-    int K; // number of tapers
-    std::vector<gpuvec> tapers;
-    gpuvec_c taperedData[num_streams];
-    gpuvec_c taperedNoise[num_streams];
-    cufftHandle multitaper_plans[num_streams];
-
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
     NppStreamContext streamContexts[num_streams];
@@ -116,10 +110,16 @@ private:
     cublasHandle_t cublas_handles2[num_streams];
 
     /* Down-conversion calibration variables */
-    float a_qi, a_qq, c_i, c_q;
+    gpuvec A_gpu;
+    gpuvec_c C_gpu;
+    int batch_count;
+    float alpha = 1.f;
+    float beta = 0.f;
+
+    float a_ii, a_qi, a_qq, c_i, c_q;
 
 public:
-    dsp(size_t len, uint64_t n, double part, int K_, double samplerate);
+    dsp(size_t len, uint64_t n, double part);
 
     ~dsp();
 
@@ -133,19 +133,23 @@ public:
 
     void resetOutput();
 
-    void compute(const hostbuf buffer_ptr);
+    uint32_t getCounter() { return cnt; }
 
-    hostvec getCumulativePower();
+    void compute(const int8_t* buffer_ptr);
 
-    hostvec_c getCumulativeField();
+    void getCumulativePower(hostvec &result);
+
+    void getCumulativeSpectrum(hostvec& result);
+
+    void getCumulativeField(hostvec_c &result);
     
     void getCumulativeSignalFft(hostvec_c &result1, hostvec& result2);
     
     void getCumulativeNoiseFft(hostvec_c& result1, hostvec& result2);
 
-    hostvec_c getCumulativeSubtrData();
+    void getCumulativeSubtrData(hostvec_c& result);
 
-    hostvec_c getCumulativeSubtrNoise();
+    void getCumulativeSubtrNoise(hostvec_c& result);
 
     void getCorrelator(hostvec_c &result);
 
@@ -155,41 +159,24 @@ public:
 
     void getSubtractionTrace(hostvec_c &trace, hostvec_c& offsets);
 
+    void getOffs(hostvec_c& vec);
+
     void resetSubtractionTrace();
 
     void createBuffer(size_t size);
 
-    void deleteBuffer();
-
     void setIntermediateFrequency(float frequency, int oversampling);
 
-    hostbuf getBuffer();
+    int8_t* getBuffer();
 
     void setAmplitude(int ampl);
 
-    std::vector<hostvec> generateDPSS(int N, float NW, int K);
-
-    void setTapers(std::vector<stdvec> h_tapers);
-
-    std::vector<hostvec> getDPSSTapers();
-
-    hostvec getPowerSpectrum();
-    hostvec_c getDataSpectrum();
-    hostvec_c getNoiseSpectrum();
-    hostvec getPeriodogram();
-
 protected:
-    template <typename T>
-    thrust::host_vector<T> getCumulativeSpectrum(const thrust::device_vector<T>* gpu_spectrum);
-
-    template<typename T>
-    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T>* traces);
-
     void handleError(cudaError_t error);
 
     void switchStream() { semaphore = (semaphore < (num_streams - 1)) ? semaphore + 1 : 0; };
 
-    void loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
+    void loadDataToGPUwithPitchAndOffset(const int8_t* buffer_ptr,
         gpubuf & gpu_buf, size_t pitch, size_t offset, int stream_num);
 
     void convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t& stream);
@@ -210,10 +197,7 @@ protected:
 
     void calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle);
 
-    void calculatePeriodogram(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
-
-    void calculateMultitaperSpectrum(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& signal_field_spectra,
-        gpuvec_c& noise_field_spectra, gpuvec& power_spectra, int stream_num);
+    void calculateTriplets(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

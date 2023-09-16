@@ -17,6 +17,7 @@
   <ItemGroup>
     <ClCompile Include="binding.cpp" />
     <ClCompile Include="digitizer.cpp" />
+    <ClCompile Include="yokogawa_gs210.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="digitizer.h" />
@@ -25,6 +26,7 @@
     <ClInclude Include="measurement.cuh" />
     <ClInclude Include="strided_range.cuh" />
     <ClInclude Include="tiled_range.cuh" />
+    <ClInclude Include="yokogawa_gs210.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="dsp.cu" />
@@ -73,29 +75,30 @@
     <LinkIncremental>true</LinkIncremental>
     <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);c_header</IncludePath>
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);c_header;D:\miniconda3\envs\Measurement\libs</LibraryPath>
-    <TargetName>g2measurement</TargetName>
+    <TargetName>multitaper_measurement</TargetName>
     <TargetExt>.pyd</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='staticlib|x64'">
     <LinkIncremental>true</LinkIncremental>
     <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);c_header</IncludePath>
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);c_header;D:\miniconda3\envs\Measurement\libs</LibraryPath>
-    <TargetName>g2measurement</TargetName>
+    <TargetName>multitaper_measurement</TargetName>
     <TargetExt>.lib</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);c_header</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);D:\CppMeasurement\G2_measurement\eigen-3.4.0;c_header</IncludePath>
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);c_header;D:\miniconda3\envs\Measurement\libs</LibraryPath>
-    <TargetName>g2measurement</TargetName>
+    <TargetName>multitaper_measurement</TargetName>
     <TargetExt>.pyd</TargetExt>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;WIN64;NOMINMAX;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\miniconda3\envs\Measurement\include\pybind11-global;D:\miniconda3\envs\Measurement\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -113,10 +116,11 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;WIN64;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;WIN64;NOMINMAX;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>D:\miniconda3\envs\Measurement\include\pybind11-global;D:\miniconda3\envs\Measurement\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OmitFramePointers>false</OmitFramePointers>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -135,21 +139,23 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>D:\miniconda3\envs\Measurement\include\pybind11-global;D:\miniconda3\envs\Measurement\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;WIN64;NOMINMAX;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\miniconda3\envs\Measurement\include\pybind11-global;D:\miniconda3\envs\Measurement\include;C:\Program Files\IVI Foundation\VISA\Win64\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
+      <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>cudart_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;cublas.lib;cufft.lib;spcm_win64_msvcpp.lib;nppc.lib;npps.lib;python310.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cudart_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;cublas.lib;cufft.lib;spcm_win64_msvcpp.lib;nppc.lib;npps.lib;python310.lib;visa64.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/NODEFAULTLIB:libcmt.lib %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalLibraryDirectories>C:\Program Files\IVI Foundation\VISA\Win64\Lib_x64\msc;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>

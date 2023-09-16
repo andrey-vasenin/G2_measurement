@@ -150,8 +150,17 @@ size_t Digitizer::getMemsize() {
     return static_cast<size_t>(memsize);
 }
 
+void Digitizer::prepareFifo(int32 notifysize) {
+    spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
+        &buffer[0], 0, buffersize);
+    this->handleError();
+
+    spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
+    this->handleError();
+}
+
 // starts the fifo measurement
-void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
+void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor, bool computing) {
     /*
     * int32 notifysize: size in bytes of one batch
     * int n: number of iterations, what basically means the total number of segments to measure
@@ -159,12 +168,12 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
     * proc_t processor: a function to be called after processing each batch
     */
     // Define the host buffer for the digitizer
-    spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
-        &buffer[0], 0, buffersize);
-    this->handleError();
+    //spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
+    //    &buffer[0], 0, buffersize);
+    //this->handleError();
 
-    spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
-    this->handleError();
+    //spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
+    //this->handleError();
     int32 shift = 0;
     int32 availBytes = 0;
     int i = 0;
@@ -182,8 +191,8 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
             switch (err)
             {
             case ERR_FIFOHWOVERRUN:
-#ifdef _DEBUG
                 std::cerr << exc.what() << std::endl;
+#ifdef _DEBUG
 #endif // _DEBUG
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_STOP);
                 spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
@@ -210,11 +219,18 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor) {
 #endif // _DEBUG
             continue;
         }
-        processor(&buffer[shift]);
+        if (computing)
+            processor(&buffer[shift]);
         spcm_dwSetParam_i32(handle, SPC_DATA_AVAIL_CARD_LEN, notifysize);
         this->handleError();
         i++;
     }
+    //spcm_dwInvalidateBuf(handle, SPCM_BUF_DATA);
+    //this->handleError();
+    //this->stopCard();
+}
+
+void Digitizer::stopFifo() {
     spcm_dwInvalidateBuf(handle, SPCM_BUF_DATA);
     this->handleError();
     this->stopCard();
