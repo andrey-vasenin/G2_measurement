@@ -9,6 +9,7 @@
 #include <vector>
 #include <complex>
 #include <cufft.h>
+#include <cufftXt.h>
 #include <cublas_v2.h>
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
@@ -25,6 +26,10 @@ typedef thrust::device_vector<float> gpuvec;
 typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
+typedef thrust::device_vector<half> gpuvec_h;
+typedef thrust::host_vector<half> hostvec_h;
+typedef thrust::device_vector<half2> gpuvec_ch;
+typedef thrust::host_vector<half2> hostvec_ch;
 typedef thrust::device_vector<char> gpubuf;
 //typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
 //    thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
@@ -53,22 +58,28 @@ inline Npp32f* to_Npp32f_p(T* v)
 
 class dsp
 {
+private:
     /* Pointer */
     hostbuf buffer;
+
+    /* Useful variables */
+    size_t trace_length; // for keeping the length of a trace
+    size_t trace1_start, trace2_start, pitch;
+    size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
+    size_t total_length; // batch_size * trace_length
+    size_t out_size;
+    int semaphore = 0;                           // for selecting the current stream
+    float scale = 500.f / 128.f; // for conversion into mV
 
     /* Pointers to arrays with data */
     gpubuf gpu_data_buf[num_streams];  // buffers for loading data
     gpubuf gpu_noise_buf[num_streams]; // buffers for loading data
-    gpuvec_c data[num_streams];
-    gpuvec_c data_calibrated[num_streams];
+    gpuvec_ch data[num_streams];
     gpuvec_c data_fft[num_streams];
-    gpuvec data_fft_norm[num_streams];
     gpuvec_c subtraction_data[num_streams];
     
-    gpuvec_c noise[num_streams];
-    gpuvec_c noise_calibrated[num_streams];
+    gpuvec_ch noise[num_streams];
     gpuvec_c noise_fft[num_streams];
-    gpuvec noise_fft_norm[num_streams];
     gpuvec_c subtraction_noise[num_streams];
 
     gpuvec power[num_streams];   // arrays for storage of average power
@@ -81,27 +92,17 @@ class dsp
     gpuvec_c firwin;
 
     /* Subtraction trace */
-    gpuvec_c subtraction_trace;
-    gpuvec_c subtraction_offs;
+    gpuvec_ch subtraction_trace;
+    gpuvec_ch subtraction_offs;
 
     /* Downconversion coefficients */
-    gpuvec_c downconversion_coeffs;
-
-private:
-    /* Useful variables */
-    size_t trace_length; // for keeping the length of a trace
-    size_t trace1_start, trace2_start, pitch;
-    size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
-    size_t total_length; // batch_size * trace_length
-    size_t out_size;
-    int semaphore = 0;                           // for selecting the current stream
-    float scale = 500.f / 128.f; // for conversion into mV
+    gpuvec_ch downconversion_coeffs;
 
     /* Multitaper method properties */
     int K; // number of tapers
-    std::vector<gpuvec> tapers;
-    gpuvec_c taperedData[num_streams];
-    gpuvec_c taperedNoise[num_streams];
+    gpuvec_h tapers[num_streams];
+    gpuvec_ch taperedData[num_streams];
+    gpuvec_ch taperedNoise[num_streams];
     cufftHandle multitaper_plans[num_streams];
 
     /* Streams' arrays */
@@ -138,10 +139,6 @@ public:
     hostvec getCumulativePower();
 
     hostvec_c getCumulativeField();
-    
-    void getCumulativeSignalFft(hostvec_c &result1, hostvec& result2);
-    
-    void getCumulativeNoiseFft(hostvec_c& result1, hostvec& result2);
 
     hostvec_c getCumulativeSubtrData();
 
@@ -167,8 +164,6 @@ public:
 
     void setAmplitude(int ampl);
 
-    std::vector<hostvec> generateDPSS(int N, float NW, int K);
-
     void setTapers(std::vector<stdvec> h_tapers);
 
     std::vector<hostvec> getDPSSTapers();
@@ -179,11 +174,9 @@ public:
     hostvec getPeriodogram();
 
 protected:
-    template <typename T>
-    thrust::host_vector<T> getCumulativeSpectrum(const thrust::device_vector<T>* gpu_spectrum);
 
     template<typename T>
-    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T>* traces);
+    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T>* traces, size_t M);
 
     void handleError(cudaError_t error);
 
@@ -192,27 +185,27 @@ protected:
     void loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
         gpubuf & gpu_buf, size_t pitch, size_t offset, int stream_num);
 
-    void convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t& stream);
+    void convertDataToMillivolts(gpuvec_ch& data, gpubuf& gpu_buf, cudaStream_t& stream);
 
-    void downconvert(gpuvec_c& data, cudaStream_t& stream);
+    void downconvert(gpuvec_ch& data, cudaStream_t& stream);
 
-    void applyDownConversionCalibration(gpuvec_c &data, gpuvec_c &data_calibrated, cudaStream_t& stream);
+    void applyDownConversionCalibration(gpuvec_ch &data, cudaStream_t& stream);
 
-    void addDataToOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t& stream);
+    void addDataToOutput(gpuvec_ch& data, gpuvec_c& output, cudaStream_t& stream);
 
-    void subtractDataFromOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t& stream);
+    void subtractDataFromOutput(gpuvec_ch& data, gpuvec_ch& output, cudaStream_t& stream);
 
     void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num);
 
-    void calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cudaStream_t& stream);
+    void calculateField(gpuvec_ch& data, gpuvec_ch& noise, gpuvec_c& output, cudaStream_t& stream);
 
-    void calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream);
+    void calculatePower(gpuvec_ch& data, gpuvec_ch& noise, gpuvec& output, cudaStream_t& stream);
 
     void calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle);
 
-    void calculatePeriodogram(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
+    //void calculatePeriodogram(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
 
-    void calculateMultitaperSpectrum(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& signal_field_spectra,
+    void calculateMultitaperSpectrum(gpuvec_ch& data, gpuvec_ch& noise, gpuvec_c& signal_field_spectra,
         gpuvec_c& noise_field_spectra, gpuvec& power_spectra, int stream_num);
 };
 

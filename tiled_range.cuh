@@ -1,3 +1,6 @@
+#ifndef TILEDRANGE
+#define TILEDRANGE
+
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
@@ -24,7 +27,7 @@ public:
         tile_functor(difference_type tile_size)
             : tile_size(tile_size) {}
 
-        __host__ __device__
+        __device__
             difference_type operator()(const difference_type& i) const
         {
             return i % tile_size;
@@ -57,3 +60,5 @@ protected:
     Iterator last;
     difference_type tiles;
 };
+
+#endif

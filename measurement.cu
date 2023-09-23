@@ -10,10 +10,8 @@
 #include <complex>
 #include <cstdint>
 #include "dsp.cuh"
-#include "dsp_functors.cuh"
 #include "digitizer.h"
 #include "measurement.cuh"
-#include "tiled_range.cuh"
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "yokogawa_gs210.h"
@@ -21,20 +19,6 @@
 #include <thread>
 
 namespace py = pybind11;
-
-template<typename T>
-py::array_t<T> to_numpy(const thrust::host_vector<T>& input_vector) {
-    // Allocate a numpy array of the appropriate size
-    py::array_t<T> result(input_vector.size());
-
-    // Get the raw pointer to the numpy array data
-    T* ptr = result.mutable_data();
-
-    // Copy the data from the thrust::host_vector to the numpy array
-    std::copy(input_vector.begin(), input_vector.end(), ptr);
-
-    return result;
-}
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address)
 {
@@ -54,7 +38,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
 
     int trace_length = processor->getTraceLength();
 
-    test_input = new int8_t[notify_size * 2];
+    test_input.resize(notify_size * 2);
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address)
@@ -85,7 +69,6 @@ void Measurement::setIntermediateFrequency(float frequency)
 {
     int oversampling = (int)std::round(1.25E+9f / dig->getSamplingRate());
     processor->setIntermediateFrequency(frequency, oversampling);
-    cudaDeviceSynchronize();
 }
 
 void Measurement::setAveragesNumber(uint64_t averages)
@@ -109,7 +92,6 @@ void Measurement::setFirwin(float left_cutoff, float right_cutoff)
 {
     int oversampling = (int) std::round(1.25E+9f / dig->getSamplingRate());
     processor->setFirwin(left_cutoff, right_cutoff, oversampling);
-    cudaDeviceSynchronize();
 }
 
 void Measurement::measure()
@@ -125,7 +107,6 @@ void Measurement::asyncCurrentSwitch()
     coil->set_current(working_current);
     setSubtractionTrace(getSubtractionData(), getSubtractionNoise());
     resetOutput();
-    cudaDeviceSynchronize();
 }
 
 void Measurement::measureWithCoil()
@@ -156,7 +137,7 @@ void Measurement::measureWithCoil()
 void Measurement::measureTest()
 {
     for (uint32_t i = 0; i < iters_num; i++)
-        func(&test_input[0]);
+        func(test_input.data());
     iters_done += iters_num;
 }
 
@@ -170,9 +151,9 @@ void Measurement::setTestInput(py::buffer input)
             "must be larger or equal to the two segment sizes");
 
     int8_t* input_ptr = (int8_t*)info.ptr;
-    tiled_range<int8_t*> tiled_input(input_ptr, input_ptr + 2 * segment_size, batch_size);
-    std::vector<int8_t> test_inp(test_input, test_input + 2 * notify_size);
-    thrust::copy(tiled_input.begin(), tiled_input.end(), test_inp.begin());
+    size_t len = 2 * segment_size;
+    for (size_t i = 0; i < batch_size; i++)
+        test_input.insert(test_input.begin() + i * len, input_ptr, input_ptr + len);
 }
 
 stdvec_c Measurement::getMeanField()
@@ -205,7 +186,6 @@ stdvec_c Measurement::postprocess(hostvec_c& data)
     return result;
 }
 
-
 stdvec Measurement::getPSD()
 {
     auto psd_spectrum = processor->getPowerSpectrum();
@@ -229,62 +209,6 @@ stdvec Measurement::getPeriodogram()
     auto periodogram = processor->getPeriodogram();
     return postprocess(periodogram);
 }
-
-py::tuple Measurement::getAverageValues()
-{
-    int len = processor->getTotalLength();
-    int tl = processor->getTraceLength();
-
-    hostvec_c signal_fft_from_gpu(len, tcf(0));
-    hostvec signal_fft_norm_from_gpu(len, 0);
-    processor->getCumulativeSignalFft(signal_fft_from_gpu, signal_fft_norm_from_gpu);
-
-    hostvec_c noise_fft_from_gpu(len);
-    hostvec noise_fft_norm_from_gpu(len, 0);
-    processor->getCumulativeNoiseFft(noise_fft_from_gpu, noise_fft_norm_from_gpu);
-
-    // Compute mean
-    std::vector<std::complex<double>> signal_fft_mean_norm_c(tl, 0.);
-    std::vector<double> signal_fft_mean_norm(tl, 0.);
-    std::vector<double> signal_fft_norm_mean(tl, 0.);
-
-    std::vector<std::complex<double>> noise_fft_mean_norm_c(tl, 0.);
-    std::vector<double> noise_fft_mean_norm(tl, 0.);
-    std::vector<double> noise_fft_norm_mean(tl, 0.);
-
-    double denominator{ 1 };
-    if (iters_done > 0)
-        denominator = static_cast<double>(iters_done * batch_size);
-    for (int j = 0; j < tl; j++)
-    {
-        for (int i = 0; i < batch_size; i++)
-        {
-            int idx = i * tl + j;
-            std::complex<double> sval(signal_fft_from_gpu[idx]);
-            signal_fft_mean_norm_c[j] += sval;
-            signal_fft_norm_mean[j] += signal_fft_norm_from_gpu[idx];
-
-            std::complex<double> nval(noise_fft_from_gpu[idx]);
-            noise_fft_mean_norm_c[j] += nval;
-            noise_fft_norm_mean[j] += noise_fft_norm_from_gpu[idx];
-        }
-        
-        signal_fft_mean_norm_c[j] /= denominator;
-        signal_fft_mean_norm[j] = std::norm(signal_fft_mean_norm_c[j]);
-        signal_fft_norm_mean[j] /= denominator;
-
-        
-        noise_fft_mean_norm_c[j] /= denominator;
-        noise_fft_mean_norm[j] = std::norm(noise_fft_mean_norm_c[j]);
-        noise_fft_norm_mean[j] /= denominator;
-    }
-    
-    return py::make_tuple(stdvec(signal_fft_mean_norm.begin(), signal_fft_mean_norm.end()),
-        stdvec(signal_fft_norm_mean.begin(), signal_fft_norm_mean.end()),
-        stdvec(noise_fft_mean_norm.begin(), noise_fft_mean_norm.end()),
-        stdvec(noise_fft_norm_mean.begin(), noise_fft_norm_mean.end()));
-}
-
 
 std::vector <std::vector<std::complex<double>>> Measurement::getCorrelator()
 {
@@ -332,9 +256,10 @@ thrust::host_vector<T> Measurement::tile(const Container<T, Args...>& data, size
     // data : vector to tile
     // N : how much to tile
     using iter_t = typename Container<T, Args...>::const_iterator;
-    thrust::host_vector<T> tiled_data(data.size() * N);
-    tiled_range<iter_t> tiled_iter(data.begin(), data.end(), N);
-    thrust::copy(tiled_iter.begin(), tiled_iter.end(), tiled_data.begin());
+    thrust::host_vector<T> tiled_data;
+    tiled_data.resize(data.size() * N);
+    for (int i = 0; i < N; i++)
+        tiled_data.insert(tiled_data.end(), data.begin(), data.end());
     return tiled_data;
 }
 
@@ -403,7 +328,6 @@ void Measurement::free()
     delete dig;
     processor = NULL;
     dig = NULL;
-    delete[] test_input;
 }
 
 Measurement::~Measurement()
