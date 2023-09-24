@@ -1,7 +1,7 @@
-#include "dsp.cuh"
-
 #ifndef DSP_FUNCTORS_CUH
 #define DSP_FUNCTORS_CUH
+
+#include "dsp.cuh"
 
 struct calibration_functor : thrust::unary_function<tcf&, void>
 {
@@ -60,24 +60,6 @@ struct downconv_functor: public thrust::binary_function<const tcf&, const tcf&, 
        tcf operator()(const tcf& x, const tcf& y)
     {
         return x * y;
-    }
-};
-
-struct abs_value_squared : public thrust::binary_function<tcf, float, float>
-{
-    __host__ __device__
-        float operator()(const tcf& x, const float& z)
-    {
-        return z + thrust::norm(x);
-    }
-};
-
-struct triplet_functor
-{
-    __host__ __device__
-        void operator()(const tcf& x, const tcf& y, float& z)
-    {
-        z += thrust::norm(x) - 2*thrust::norm(y);
     }
 };
 
