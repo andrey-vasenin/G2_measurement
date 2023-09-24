@@ -36,7 +36,8 @@ py::array_t<T> to_numpy(const thrust::host_vector<T>& input_vector) {
     return result;
 }
 
-Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address)
+Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+    int second_oversampling, int K, const char* coil_address)
 {
     dig = dig_;
     sampling_rate = dig->getSamplingRate();
@@ -47,7 +48,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     notify_size = 2 * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000);  // ms
-    processor = new dsp(segment_size, batch_size, part, K, sampling_rate);
+    processor = new dsp(segment_size, batch_size, part, K, sampling_rate, second_oversampling);
     this->initializeBuffer();
 
     func = [this](int8_t* data) mutable { this->processor->compute(data); };
@@ -57,8 +58,10 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     test_input = new int8_t[notify_size * 2];
 }
 
-Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address)
-    : Measurement(new Digitizer(reinterpret_cast<void*>(dig_handle)), averages, batch, part, K, coil_address)
+Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
+    int second_oversampling, int K, const char* coil_address)
+    : Measurement(new Digitizer(reinterpret_cast<void*>(dig_handle)), averages, batch, part,
+        second_oversampling, K, coil_address)
 {}
 
 void Measurement::initializeBuffer()
@@ -228,61 +231,6 @@ stdvec Measurement::getPeriodogram()
 {
     auto periodogram = processor->getPeriodogram();
     return postprocess(periodogram);
-}
-
-py::tuple Measurement::getAverageValues()
-{
-    int len = processor->getTotalLength();
-    int tl = processor->getTraceLength();
-
-    hostvec_c signal_fft_from_gpu(len, tcf(0));
-    hostvec signal_fft_norm_from_gpu(len, 0);
-    processor->getCumulativeSignalFft(signal_fft_from_gpu, signal_fft_norm_from_gpu);
-
-    hostvec_c noise_fft_from_gpu(len);
-    hostvec noise_fft_norm_from_gpu(len, 0);
-    processor->getCumulativeNoiseFft(noise_fft_from_gpu, noise_fft_norm_from_gpu);
-
-    // Compute mean
-    std::vector<std::complex<double>> signal_fft_mean_norm_c(tl, 0.);
-    std::vector<double> signal_fft_mean_norm(tl, 0.);
-    std::vector<double> signal_fft_norm_mean(tl, 0.);
-
-    std::vector<std::complex<double>> noise_fft_mean_norm_c(tl, 0.);
-    std::vector<double> noise_fft_mean_norm(tl, 0.);
-    std::vector<double> noise_fft_norm_mean(tl, 0.);
-
-    double denominator{ 1 };
-    if (iters_done > 0)
-        denominator = static_cast<double>(iters_done * batch_size);
-    for (int j = 0; j < tl; j++)
-    {
-        for (int i = 0; i < batch_size; i++)
-        {
-            int idx = i * tl + j;
-            std::complex<double> sval(signal_fft_from_gpu[idx]);
-            signal_fft_mean_norm_c[j] += sval;
-            signal_fft_norm_mean[j] += signal_fft_norm_from_gpu[idx];
-
-            std::complex<double> nval(noise_fft_from_gpu[idx]);
-            noise_fft_mean_norm_c[j] += nval;
-            noise_fft_norm_mean[j] += noise_fft_norm_from_gpu[idx];
-        }
-        
-        signal_fft_mean_norm_c[j] /= denominator;
-        signal_fft_mean_norm[j] = std::norm(signal_fft_mean_norm_c[j]);
-        signal_fft_norm_mean[j] /= denominator;
-
-        
-        noise_fft_mean_norm_c[j] /= denominator;
-        noise_fft_mean_norm[j] = std::norm(noise_fft_mean_norm_c[j]);
-        noise_fft_norm_mean[j] /= denominator;
-    }
-    
-    return py::make_tuple(stdvec(signal_fft_mean_norm.begin(), signal_fft_mean_norm.end()),
-        stdvec(signal_fft_norm_mean.begin(), signal_fft_norm_mean.end()),
-        stdvec(noise_fft_mean_norm.begin(), noise_fft_mean_norm.end()),
-        stdvec(noise_fft_norm_mean.begin(), noise_fft_norm_mean.end()));
 }
 
 

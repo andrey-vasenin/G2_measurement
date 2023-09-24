@@ -3,7 +3,7 @@
 #ifndef DSP_FUNCTORS_CUH
 #define DSP_FUNCTORS_CUH
 
-struct calibration_functor : thrust::unary_function<tcf, tcf>
+struct calibration_functor : thrust::unary_function<tcf&, void>
 {
     float a_qi, a_qq;
     float c_i, c_q;
@@ -14,21 +14,23 @@ struct calibration_functor : thrust::unary_function<tcf, tcf>
     {
     }
 
-    __host__ __device__
-        tcf operator()(tcf x)
+    __device__ inline __forceinline__
+        void operator()(tcf& x)
     {
-        return tcf(x.real() + c_i,
-            a_qi * x.real() + a_qq * x.imag() + c_q);
+        float xr = x.real();
+        float xi = x.imag();
+        x.real(xr + c_i);
+        x.imag(a_qi * xr + a_qq * xi + c_q);
     }
 };
 
-struct millivolts_functor : thrust::binary_function<char, char, tcf>
+struct millivolts_functor : thrust::binary_function<const char&, const char&, tcf>
 {
     float scale;
 
     millivolts_functor(float s) : scale(s) {}
 
-    __host__ __device__ tcf operator()(char i, char q)
+    __device__ inline __forceinline__ tcf operator()(const char& i, const char& q)
     {
         return tcf(static_cast<float>(i) * scale, static_cast<float>(q) * scale);
     }
@@ -36,7 +38,7 @@ struct millivolts_functor : thrust::binary_function<char, char, tcf>
 
 struct field_functor
 {
-    __host__ __device__
+    __device__ inline __forceinline__
         void operator()(const tcf& x, const tcf& y, tcf& z)
     {
         z += x - y;
@@ -45,10 +47,19 @@ struct field_functor
 
 struct power_functor
 {
-    __host__ __device__
+    __device__ inline __forceinline__
         void operator()(const tcf& x, const tcf& y, float& z)
     {
         z += thrust::norm(x) - thrust::norm(y);
+    }
+};
+
+struct downconv_functor: public thrust::binary_function<const tcf&, const tcf&, tcf>
+{
+    __device__ inline __forceinline__
+       tcf operator()(const tcf& x, const tcf& y)
+    {
+        return x * y;
     }
 };
 
@@ -70,11 +81,9 @@ struct triplet_functor
     }
 };
 
-
-
-struct taper_functor : public thrust::binary_function<tcf, float, tcf>
+struct taper_functor : public thrust::binary_function<const tcf&, const float&, tcf>
 {
-    __host__ __device__
+    __device__ inline __forceinline__
         tcf operator()(const tcf& data, const float& taper)
     {
         return data * taper;

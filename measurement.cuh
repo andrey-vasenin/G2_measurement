@@ -42,9 +42,11 @@ private:
     proc_t func_ult_calib;
 
 public:
-    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address);
+    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
+        int second_oversampling, int K, const char* coil_address);
 
-    Measurement(Digitizer *dig, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address);
+    Measurement(Digitizer* dig_, uint64_t averages, uint64_t batch, double part,
+        int second_oversampling, int K, const char* coil_address);
 
     void setAmplitude(int ampl);
 
@@ -89,8 +91,6 @@ public:
     stdvec_c getNoiseSpectrum();
     
     stdvec getPeriodogram();
-
-    py::tuple getAverageValues();
 
     std::vector <std::vector<std::complex<double>>> getCorrelator();
 
