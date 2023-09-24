@@ -318,7 +318,7 @@ void dsp::loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
 // Converts bytes into 32-bit floats with mV dimensionality
 void dsp::convertDataToMillivolts(gpuvec_c& data, const gpubuf& gpu_buf, const cudaStream_t &stream)
 {
-    using iter = thrust::device_vector<const char>::iterator;
+    using iter = gpubuf::const_iterator;
     strided_range<iter> channelI(gpu_buf.begin(), gpu_buf.end(), 2);
     strided_range<iter> channelQ(gpu_buf.begin() + 1, gpu_buf.end(), 2);
     thrust::transform(thrust::cuda::par_nosync.on(stream),
@@ -375,7 +375,7 @@ void dsp::calculateField(const gpuvec_c& data, const gpuvec_c& noise, gpuvec_c& 
 
 void dsp::resample(const gpuvec_c& traces, gpuvec_c& resampled_traces, const cudaStream_t& stream)
 {
-    using iter = thrust::device_vector<const tcf>::iterator;
+    using iter = gpuvec_c::const_iterator;
     strided_range<iter> strided_iter(traces.begin(), traces.end(), oversampling);
     thrust::copy(thrust::cuda::par_nosync.on(stream), strided_iter.begin(), strided_iter.end(), resampled_traces.begin());
 }

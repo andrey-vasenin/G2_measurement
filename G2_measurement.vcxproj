@@ -107,7 +107,7 @@
     <TargetExt>.pyd</TargetExt>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test|x64'">
-    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);D:\CppMeasurement\G2_measurement\eigen-3.4.0;c_header</IncludePath>
+    <IncludePath>$(VC_IncludePath);$(WindowsSDK_IncludePath);c_header</IncludePath>
     <LibraryPath>$(VC_LibraryPath_x64);$(WindowsSDK_LibraryPath_x64);c_header;D:\miniconda3\envs\Measurement\libs</LibraryPath>
     <TargetName>multitaper_measurement</TargetName>
     <TargetExt>.exe</TargetExt>
