@@ -5,8 +5,8 @@
 
 struct calibration_functor : thrust::unary_function<tcf&, void>
 {
-    float a_qi, a_qq;
-    float c_i, c_q;
+    const float a_qi, a_qq;
+    const float c_i, c_q;
 
     calibration_functor(float _a_qi, float _a_qq,
         float _c_i, float _c_q) : a_qi{ _a_qi }, a_qq{ _a_qq },
@@ -26,7 +26,7 @@ struct calibration_functor : thrust::unary_function<tcf&, void>
 
 struct millivolts_functor : thrust::binary_function<const char&, const char&, tcf>
 {
-    float scale;
+    const float scale;
 
     millivolts_functor(float s) : scale(s) {}
 
