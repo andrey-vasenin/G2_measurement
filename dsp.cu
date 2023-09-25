@@ -376,8 +376,36 @@ void dsp::calculateField(const gpuvec_c& data, const gpuvec_c& noise, gpuvec_c& 
 void dsp::resample(const gpuvec_c& traces, gpuvec_c& resampled_traces, const cudaStream_t& stream)
 {
     using iter = gpuvec_c::const_iterator;
-    strided_range<iter> strided_iter(traces.begin(), traces.end(), oversampling);
-    thrust::copy(thrust::cuda::par_nosync.on(stream), strided_iter.begin(), strided_iter.end(), resampled_traces.begin());
+    switch (oversampling)
+    {
+    case 1:
+        thrust::copy(thrust::cuda::par_nosync.on(stream), traces.begin(), traces.end(), resampled_traces.begin());
+        break;
+    case 2:
+    {
+        strided_range<iter> t1(traces.begin(), traces.end(), oversampling);
+        strided_range<iter> t2(traces.begin() + 1, traces.end(), oversampling);
+        auto beginning = thrust::make_zip_iterator(t1.begin(), t2.begin());
+        auto end = thrust::make_zip_iterator(t1.end(), t2.end());
+        thrust::transform(thrust::cuda::par_nosync.on(stream), beginning, end, resampled_traces.begin(),
+            thrust::make_zip_function(downsample2_functor()));
+        break;
+    }
+    case 4:
+    {
+        strided_range<iter> t1(traces.begin(), traces.end(), oversampling);
+        strided_range<iter> t2(traces.begin() + 1, traces.end(), oversampling);
+        strided_range<iter> t3(traces.begin() + 2, traces.end(), oversampling);
+        strided_range<iter> t4(traces.begin() + 3, traces.end(), oversampling);
+        auto beginning = thrust::make_zip_iterator(t1.begin(), t2.begin(), t3.begin(), t4.begin());
+        auto end = thrust::make_zip_iterator(t1.end(), t2.end(), t3.end(), t4.end());
+        thrust::transform(thrust::cuda::par_nosync.on(stream), beginning, end, resampled_traces.begin(),
+            thrust::make_zip_function(downsample4_functor()));
+        break;
+    }
+    default:
+        throw std::runtime_error("Unsupported second oversampling");
+    }
 }
 
 // Calculates the power from the data in the GPU memory

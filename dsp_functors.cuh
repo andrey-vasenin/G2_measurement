@@ -72,5 +72,23 @@ struct taper_functor : public thrust::binary_function<const tcf&, const float&, 
     }
 };
 
+struct downsample2_functor
+{
+    __device__ inline
+        tcf operator()(const tcf& s1, const tcf& s2)
+    {
+        return (s1 + s2) / 2.f;
+    }
+};
+
+struct downsample4_functor
+{
+    __device__ inline
+        tcf operator()(const tcf& s1, const tcf& s2, const tcf& s3, const tcf& s4)
+    {
+        return (s1 + s2 + s3 + s4) / 4.f;
+    }
+};
+
 
 #endif // !DSP_FUNCTORS_CUH
