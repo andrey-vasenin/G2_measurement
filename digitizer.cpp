@@ -150,8 +150,8 @@ size_t Digitizer::getMemsize() {
     return static_cast<size_t>(memsize);
 }
 
-void Digitizer::prepareFifo(int32 notifysize) {
-    spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
+void Digitizer::prepareFifo(uint32 notifysize) {
+    spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
         &buffer[0], 0, buffersize);
     this->handleError();
 
@@ -160,7 +160,7 @@ void Digitizer::prepareFifo(int32 notifysize) {
 }
 
 // starts the fifo measurement
-void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor, bool computing) {
+void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool computing) {
     /*
     * int32 notifysize: size in bytes of one batch
     * int n: number of iterations, what basically means the total number of segments to measure
@@ -195,7 +195,7 @@ void Digitizer::launchFifo(int32 notifysize, int n, proc_t processor, bool compu
 #ifdef _DEBUG
 #endif // _DEBUG
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_STOP);
-                spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, (uint32)notifysize,
+                spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
                     &buffer[0], 0, buffersize);
                 this->handleError();
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);

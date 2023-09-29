@@ -35,10 +35,10 @@ int main()
     mes.setTapers(tapers);
 
     mes.setFirwin(1, 99);
-    mes.setIntermediateFrequency(0.05);
+    mes.setIntermediateFrequency(0.05f);
     mes.setCalibration(1, 0, 0, 0);
     mes.setAmplitude(100);
-    mes.setCurrents(-0.5435e-3, -2.5e-3);
+    mes.setCurrents(-0.5435e-3f, -2.5e-3f);
 
     auto t1 = high_resolution_clock::now();
     mes.measure();

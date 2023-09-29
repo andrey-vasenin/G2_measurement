@@ -22,25 +22,11 @@
 
 namespace py = pybind11;
 
-template<typename T>
-py::array_t<T> to_numpy(const thrust::host_vector<T>& input_vector) {
-    // Allocate a numpy array of the appropriate size
-    py::array_t<T> result(input_vector.size());
-
-    // Get the raw pointer to the numpy array data
-    T* ptr = result.mutable_data();
-
-    // Copy the data from the thrust::host_vector to the numpy array
-    std::copy(input_vector.begin(), input_vector.end(), ptr);
-
-    return result;
-}
-
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
     int second_oversampling, int K, const char* coil_address)
 {
     dig = dig_;
-    sampling_rate = dig->getSamplingRate();
+    sampling_rate = static_cast<double>(dig->getSamplingRate());
     coil = new yokogawa_gs210(coil_address);
     segment_size = dig->getSegmentSize();
     batch_size = batch;
@@ -194,7 +180,7 @@ stdvec Measurement::postprocess(hostvec& data)
 {
     using namespace thrust::placeholders;
     stdvec result(data.size());
-    float divider = (iters_done > 0) ? iters_done : 1;
+    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
     thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
     return result;
 }
@@ -203,7 +189,7 @@ stdvec_c Measurement::postprocess(hostvec_c& data)
 {
     using namespace thrust::placeholders;
     stdvec_c result(data.size());
-    float divider = (iters_done > 0) ? iters_done : 1;
+    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
     thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
     return result;
 }

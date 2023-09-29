@@ -1,22 +1,19 @@
 ﻿//
 // Created by andrei on 4/13/21.
 //
+#ifndef SPECTRUMEXTENSION_MEASUREMENT_H
+#define SPECTRUMEXTENSION_MEASUREMENT_H
+
 #include <vector>
 #include <memory>
 #include <cstdint>
 #include "digitizer.h"
 #include "dsp.cuh"
 #include <pybind11/pybind11.h>
-#include <pybind11/numpy.h>
 #include "yokogawa_gs210.h"
 
 namespace py = pybind11;
 
-#ifndef SPECTRUMEXTENSION_MEASUREMENT_H
-#define SPECTRUMEXTENSION_MEASUREMENT_H
-
-typedef py::array_t<double> ndarray;
-typedef py::array_t<std::complex<double>> ndarray_c;
 
 class Measurement {
 private:
@@ -29,7 +26,7 @@ private:
     size_t notify_size;
     uint64_t iters_num;
     uint64_t iters_done;
-    uint64_t sampling_rate;
+    double sampling_rate;
 
     float offset_current = 0.f;
     float working_current = 0.f;

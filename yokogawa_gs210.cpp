@@ -53,7 +53,8 @@ void yokogawa_gs210::check_status()
 	{
 		ViChar errorMessage[256];
 		int error = viStatusDesc(session, status, errorMessage);
-		throw std::runtime_error(std::format("{}\nError code: {}\n"s, errorMessage, status));
+		std::string errorMessageStr(errorMessage);
+		throw std::runtime_error(errorMessageStr);
 	}
 }
 

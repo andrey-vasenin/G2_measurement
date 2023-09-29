@@ -71,11 +71,11 @@ public:
     void setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int segments);
 
     /* Measurers */
-    void prepareFifo(int32 notifysize);
+    void prepareFifo(uint32 notifysize);
 
     void stopFifo();
 
-    void launchFifo(int32 notifysize, int n, proc_t processor, bool computing);
+    void launchFifo(uint32 notifysize, int n, proc_t processor, bool computing);
 
     /* Control */
     void stopCard();
