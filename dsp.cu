@@ -128,13 +128,13 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         // Initialize cuFFT plans
         check_cufft_error(cufftPlan1d(&plans[i], trace_length, CUFFT_C2C, batch_size),
                           "Error initializing cuFFT plan\n");
-        check_cufft_error(cufftPlan1d(&multitaper_plans[i], resampled_trace_length, CUFFT_C2C, batch_size),
+        check_cufft_error(cufftPlan1d(&resampled_plans[i], resampled_trace_length, CUFFT_C2C, batch_size),
             "Error initializing cuFFT plan\n");
 
         // Assign streams to cuFFT plans
         check_cufft_error(cufftSetStream(plans[i], streams[i]),
                           "Error assigning a stream to a cuFFT plan\n");
-        check_cufft_error(cufftSetStream(multitaper_plans[i], streams[i]),
+        check_cufft_error(cufftSetStream(resampled_plans[i], streams[i]),
             "Error assigning a stream to a cuFFT plan\n");
 
         // Initialize cuBLAS
@@ -165,7 +165,7 @@ dsp::~dsp()
 
         // Destroy cuFFT plans
         cufftDestroy(plans[i]);
-        cufftDestroy(multitaper_plans[i]);
+        cufftDestroy(resampled_plans[i]);
 
         // Destroy GPU streams
         handleError(cudaStreamDestroy(streams[i]));
@@ -294,8 +294,8 @@ void dsp::compute(const hostbuf buffer_ptr)
     calculatePower(data[stream_num], noise[stream_num], power[stream_num], streams[stream_num]);
     //calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
     //    out[stream_num], cublas_handles[stream_num]);
-    resample(data[stream_num], data_resampled[stream_num], streams[stream_num]);
-    resample(noise[stream_num], noise_resampled[stream_num], streams[stream_num]);
+    resampleFFT(data[stream_num], data_resampled[stream_num], stream_num);
+    resampleFFT(noise[stream_num], noise_resampled[stream_num], stream_num);
     calculateMultitaperSpectrum(data_resampled[stream_num], noise_resampled[stream_num],
         data_fft[stream_num], noise_fft[stream_num], spectrum[stream_num], stream_num);
     calculatePeriodogram(data[stream_num], noise[stream_num],
@@ -408,6 +408,47 @@ void dsp::resample(const gpuvec_c& traces, gpuvec_c& resampled_traces, const cud
     }
 }
 
+void dsp::resampleFFT(gpuvec_c& traces, gpuvec_c& resampled_traces, const int& stream_num)
+{
+    // 1. FFT the original data
+    cufftComplex* cufft_traces = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(traces.data()));
+    auto cufftstat = cufftExecC2C(plans[stream_num], cufft_traces, cufft_traces, CUFFT_FORWARD);
+    check_cufft_error(cufftstat, "Error executing cufft when resampling");
+    normalize(traces, 1.f / static_cast<float>(trace_length), stream_num);
+
+    // 2. Copy the required spectral region that will have a new resampled length
+    // Calculate the pitch (stride) of the input and output arrays
+    size_t width = resampled_trace_length / 2 * sizeof(tcf);
+    size_t src_offset1 = 0;
+    size_t src_offset2 = trace_length - resampled_trace_length / 2 - 1;
+    size_t dst_offset1 = 0;
+    size_t dst_offset2 = resampled_trace_length / 2 - 1;
+    size_t input_pitch = trace_length * sizeof(tcf);
+    size_t output_pitch = resampled_trace_length * sizeof(tcf);
+
+    // Use cudaMemcpy2DAsync to copy all segments at once
+    cudaMemcpy2DAsync(reinterpret_cast<void *>(thrust::raw_pointer_cast(resampled_traces.data() + dst_offset1)), output_pitch,
+        reinterpret_cast<void*>(thrust::raw_pointer_cast(traces.data() + src_offset1)), input_pitch,
+        width, batch_size, cudaMemcpyDeviceToDevice, streams[stream_num]);
+    cudaMemcpy2DAsync(reinterpret_cast<void*>(thrust::raw_pointer_cast(resampled_traces.data() + dst_offset2)), output_pitch,
+        reinterpret_cast<void*>(thrust::raw_pointer_cast(traces.data() + src_offset2)), input_pitch,
+        width, batch_size, cudaMemcpyDeviceToDevice, streams[stream_num]);
+
+    // 3. Inverse FFT data and resampled data
+    auto cufft_resampled_traces = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(resampled_traces.data()));
+    cufftExecC2C(resampled_plans[stream_num], cufft_resampled_traces, cufft_resampled_traces, CUFFT_INVERSE);
+    normalize(resampled_traces, 1.f / static_cast<float>(resampled_trace_length), stream_num);
+    cufftExecC2C(plans[stream_num], cufft_traces, cufft_traces, CUFFT_INVERSE);
+    normalize(traces, 1.f / static_cast<float>(trace_length), stream_num);
+}
+
+void dsp::normalize(gpuvec_c& data, float coeff, int stream_num)
+{
+    Npp32fc x{ coeff, 0.f };
+    nppsMulC_32fc_I_Ctx(x, reinterpret_cast<Npp32fc*>(thrust::raw_pointer_cast(data.data())),
+        data.size(), streamContexts[stream_num]);
+}
+
 // Calculates the power from the data in the GPU memory
 void dsp::calculatePower(const gpuvec_c& data, const gpuvec_c& noise, gpuvec& output, const cudaStream_t& stream)
 {
@@ -473,8 +514,8 @@ void dsp::calculateMultitaperSpectrum(const gpuvec_c& data, const gpuvec_c& nois
         // 2. FFT
         auto cufft_tapered_data = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(taperedData[stream_num].data()));
         auto cufft_tapered_noise = reinterpret_cast<cufftComplex*>(thrust::raw_pointer_cast(taperedNoise[stream_num].data()));
-        cufftExecC2C(multitaper_plans[stream_num], cufft_tapered_data, cufft_tapered_data, CUFFT_FORWARD);
-        cufftExecC2C(multitaper_plans[stream_num], cufft_tapered_noise, cufft_tapered_noise, CUFFT_FORWARD);
+        cufftExecC2C(resampled_plans[stream_num], cufft_tapered_data, cufft_tapered_data, CUFFT_FORWARD);
+        cufftExecC2C(resampled_plans[stream_num], cufft_tapered_noise, cufft_tapered_noise, CUFFT_FORWARD);
         // 3. Compute Field Spectra
         addDataToOutput(taperedData[stream_num], signal_field_spectra, stream_num);
         addDataToOutput(taperedNoise[stream_num], noise_field_spectra, stream_num);

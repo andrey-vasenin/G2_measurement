@@ -44,14 +44,14 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     coil = new yokogawa_gs210(coil_address);
     segment_size = dig->getSegmentSize();
     batch_size = batch;
-    this->setAveragesNumber(averages);
+    setAveragesNumber(averages);
     notify_size = 2 * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000);  // ms
     processor = new dsp(segment_size, batch_size, part, K, sampling_rate, second_oversampling);
-    this->initializeBuffer();
+    initializeBuffer();
 
-    func = [this](int8_t* data) mutable { this->processor->compute(data); };
+    func = [this](int8_t* data) mutable { processor->compute(data); };
 
     int trace_length = processor->getTraceLength();
 
@@ -307,7 +307,7 @@ stdvec_c Measurement::getSubtractionNoise()
 
 py::tuple Measurement::getSubtractionTrace()
 {
-    int len = processor->getTotalLength();
+    auto len = processor->getTotalLength();
     hostvec_c subtraction_trace(len);
     hostvec_c subtraction_offs(len);
     processor->getSubtractionTrace(subtraction_trace, subtraction_offs);

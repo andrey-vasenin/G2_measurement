@@ -103,7 +103,7 @@ private:
     std::vector<gpuvec> tapers;
     gpuvec_c taperedData[num_streams];
     gpuvec_c taperedNoise[num_streams];
-    cufftHandle multitaper_plans[num_streams];
+    cufftHandle resampled_plans[num_streams];
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
@@ -202,6 +202,10 @@ protected:
     void calculateField(const gpuvec_c& data, const gpuvec_c& noise, gpuvec_c& output, const cudaStream_t& stream);
 
     void resample(const gpuvec_c& traces, gpuvec_c& resampled_traces, const cudaStream_t& stream);
+
+    void resampleFFT(gpuvec_c& traces, gpuvec_c& resampled_traces, const int& stream_num);
+
+    void normalize(gpuvec_c& data, float coeff, int stream_num);
 
     void calculatePower(const gpuvec_c& data, const gpuvec_c& noise, gpuvec& output, const cudaStream_t& stream);
 
