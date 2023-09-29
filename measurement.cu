@@ -23,7 +23,7 @@
 namespace py = pybind11;
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-    int second_oversampling, int K, const char* coil_address)
+                         int second_oversampling, int K, const char *coil_address)
 {
     dig = dig_;
     sampling_rate = static_cast<double>(dig->getSamplingRate());
@@ -33,11 +33,12 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     setAveragesNumber(averages);
     notify_size = 2 * segment_size * batch_size;
     dig->handleError();
-    dig->setTimeout(5000);  // ms
+    dig->setTimeout(5000); // ms
     processor = new dsp(segment_size, batch_size, part, K, sampling_rate, second_oversampling);
     initializeBuffer();
 
-    func = [this](int8_t* data) mutable { processor->compute(data); };
+    func = [this](int8_t *data) mutable
+    { processor->compute(data); };
 
     int trace_length = processor->getTraceLength();
 
@@ -45,10 +46,11 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-    int second_oversampling, int K, const char* coil_address)
-    : Measurement(new Digitizer(reinterpret_cast<void*>(dig_handle)), averages, batch, part,
-        second_oversampling, K, coil_address)
-{}
+                         int second_oversampling, int K, const char *coil_address)
+    : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
+                  second_oversampling, K, coil_address)
+{
+}
 
 void Measurement::initializeBuffer()
 {
@@ -60,7 +62,7 @@ void Measurement::initializeBuffer()
 
 void Measurement::setCurrents(float wc, float oc)
 {
-    working_current = wc; 
+    working_current = wc;
     offset_current = oc;
 }
 
@@ -96,15 +98,15 @@ void Measurement::setCalibration(float r, float phi, float offset_i, float offse
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
 {
-    int oversampling = (int) std::round(1.25E+9f / dig->getSamplingRate());
+    int oversampling = static_cast<int>(std::round(1.25E+9f / dig->getSamplingRate()));
     processor->setFirwin(left_cutoff, right_cutoff, oversampling);
     cudaDeviceSynchronize();
 }
 
 void Measurement::measure()
 {
-    dig->prepareFifo(notify_size);
-    dig->launchFifo(notify_size, iters_num, func, true);
+    dig->prepareFifo(static_cast<unsigned long>(notify_size));
+    dig->launchFifo(static_cast<unsigned long>(notify_size), iters_num, func, true);
     dig->stopFifo();
     iters_done += iters_num;
 }
@@ -125,17 +127,17 @@ void Measurement::measureWithCoil()
     dig->launchFifo(notify_size, iters_num, func, true);
     iters_done += iters_num;
 
-    uint64_t iters_delay = 1 * sampling_rate / notify_size * 2;
-    //auto a = std::async(std::launch::async, &Measurement::asyncCurrentSwitch, this);
-    //dig->launchFifo(notify_size, iters_delay, func, false);
-    //a.wait();
+    uint64_t iters_delay = static_cast<size_t>(sampling_rate) / notify_size * 2;
+    // auto a = std::async(std::launch::async, &Measurement::asyncCurrentSwitch, this);
+    // dig->launchFifo(notify_size, iters_delay, func, false);
+    // a.wait();
 
-    std::thread t1 (&Measurement::asyncCurrentSwitch, this);
-    //std::thread t2 (&Digitizer::launchFifo, dig, notify_size, iters_delay, func, false);
+    std::thread t1(&Measurement::asyncCurrentSwitch, this);
+    // std::thread t2 (&Digitizer::launchFifo, dig, notify_size, iters_delay, func, false);
     dig->launchFifo(notify_size, iters_delay, func, false);
     t1.join();
-    //t2.join();
-    //asyncCurrentSwitch();
+    // t2.join();
+    // asyncCurrentSwitch();
 
     dig->launchFifo(notify_size, iters_num, func, true);
     iters_done += iters_num;
@@ -156,10 +158,10 @@ void Measurement::setTestInput(py::buffer input)
         throw std::runtime_error("Number of dimensions must be one");
     if (static_cast<size_t>(info.size) < 2 * segment_size)
         throw std::runtime_error("Number of element in the imput array "
-            "must be larger or equal to the two segment sizes");
+                                 "must be larger or equal to the two segment sizes");
 
-    int8_t* input_ptr = (int8_t*)info.ptr;
-    tiled_range<int8_t*> tiled_input(input_ptr, input_ptr + 2 * segment_size, batch_size);
+    int8_t *input_ptr = (int8_t *)info.ptr;
+    tiled_range<int8_t *> tiled_input(input_ptr, input_ptr + 2 * segment_size, batch_size);
     std::vector<int8_t> test_inp(test_input, test_input + 2 * notify_size);
     thrust::copy(tiled_input.begin(), tiled_input.end(), test_inp.begin());
 }
@@ -176,7 +178,7 @@ stdvec Measurement::getMeanPower()
     return postprocess(power_form_gpu);
 }
 
-stdvec Measurement::postprocess(hostvec& data)
+stdvec Measurement::postprocess(hostvec &data)
 {
     using namespace thrust::placeholders;
     stdvec result(data.size());
@@ -185,7 +187,7 @@ stdvec Measurement::postprocess(hostvec& data)
     return result;
 }
 
-stdvec_c Measurement::postprocess(hostvec_c& data)
+stdvec_c Measurement::postprocess(hostvec_c &data)
 {
     using namespace thrust::placeholders;
     stdvec_c result(data.size());
@@ -193,7 +195,6 @@ stdvec_c Measurement::postprocess(hostvec_c& data)
     thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
     return result;
 }
-
 
 stdvec Measurement::getPSD()
 {
@@ -219,14 +220,13 @@ stdvec Measurement::getPeriodogram()
     return postprocess(periodogram);
 }
 
-
-std::vector <std::vector<std::complex<double>>> Measurement::getCorrelator()
+std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator()
 {
     int len = processor->getOutSize();
     int side = processor->getTraceLength();
 
     hostvec_c result(len);
-    std::vector <std::vector<std::complex<double>>> average_result(
+    std::vector<std::vector<std::complex<double>>> average_result(
         side, std::vector<std::complex<double>>(side));
 
     // Receive data from GPU
@@ -261,7 +261,7 @@ stdvec_c Measurement::getRawCorrelator()
 }
 
 template <template <typename, typename...> class Container, typename T, typename... Args>
-thrust::host_vector<T> Measurement::tile(const Container<T, Args...>& data, size_t N)
+thrust::host_vector<T> Measurement::tile(const Container<T, Args...> &data, size_t N)
 {
     // data : vector to tile
     // N : how much to tile
@@ -297,10 +297,9 @@ py::tuple Measurement::getSubtractionTrace()
     hostvec_c subtraction_trace(len);
     hostvec_c subtraction_offs(len);
     processor->getSubtractionTrace(subtraction_trace, subtraction_offs);
-    return py::make_tuple(stdvec_c(subtraction_trace.begin(), subtraction_trace.end()), 
-        stdvec_c(subtraction_offs.begin(), subtraction_offs.end()));
+    return py::make_tuple(stdvec_c(subtraction_trace.begin(), subtraction_trace.end()),
+                          stdvec_c(subtraction_offs.begin(), subtraction_offs.end()));
 }
-
 
 std::vector<std::vector<float>> Measurement::getDPSSTapers()
 {
