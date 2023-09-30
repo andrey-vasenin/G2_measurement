@@ -14,12 +14,12 @@
 
 namespace py = pybind11;
 
-
-class Measurement {
+class Measurement
+{
 private:
-    Digitizer* dig;
-    yokogawa_gs210* coil;
-    dsp* processor;
+    Digitizer *dig;
+    yokogawa_gs210 *coil;
+    dsp *processor;
     size_t segment_size;
     uint64_t segments_count;
     uint64_t batch_size;
@@ -40,10 +40,10 @@ private:
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-        int second_oversampling, int K, const char* coil_address);
+                int second_oversampling, int K, const char *coil_address);
 
-    Measurement(Digitizer* dig_, uint64_t averages, uint64_t batch, double part,
-        int second_oversampling, int K, const char* coil_address);
+    Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+                int second_oversampling, int K, const char *coil_address);
 
     void setAmplitude(int ampl);
 
@@ -62,9 +62,9 @@ public:
     void setCalibration(float r, float phi, float offset_i, float offset_q);
 
     void setFirwin(float left_cutoff, float right_cutoff);
-    
+
     void setTapers(std::vector<stdvec> tapers);
-    
+
     void setIntermediateFrequency(float frequency);
 
     void measure();
@@ -75,7 +75,7 @@ public:
 
     void measureTest();
 
-    void setTestInput(const std::vector<int8_t>& input);
+    void setTestInput(const std::vector<int8_t> &input);
 
     stdvec_c getMeanField();
 
@@ -86,15 +86,15 @@ public:
     stdvec_c getDataSpectrum();
 
     stdvec_c getNoiseSpectrum();
-    
+
     stdvec getPeriodogram();
 
-    std::vector <std::vector<std::complex<double>>> getCorrelator();
+    std::vector<std::vector<std::complex<double>>> getCorrelator();
 
     stdvec_c getSubtractionData();
 
     stdvec_c getSubtractionNoise();
-    
+
     stdvec_c getRawCorrelator();
 
     void setSubtractionTrace(stdvec_c trace, stdvec_c offsets);
@@ -118,7 +118,7 @@ protected:
     std::vector<V> postprocess(const thrust::host_vector<T> &data);
 
     template <template <typename, typename...> class Container, typename T, typename... Args>
-    thrust::host_vector<T> tile(const Container<T, Args...>& data, size_t N);
+    thrust::host_vector<T> tile(const Container<T, Args...> &data, size_t N);
 };
 
-#endif //SPECTRUMEXTENSION_MEASUREMENT_H
+#endif // SPECTRUMEXTENSION_MEASUREMENT_H

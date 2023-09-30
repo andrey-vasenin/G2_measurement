@@ -152,7 +152,7 @@ void Measurement::measureTest()
     iters_done += iters_num;
 }
 
-void Measurement::setTestInput(const std::vector<int8_t>& input)
+void Measurement::setTestInput(const std::vector<int8_t> &input)
 {
     if (input.size() < 2 * segment_size)
         throw std::runtime_error("Number of element in the input array "
@@ -292,7 +292,8 @@ std::vector<V> Measurement::postprocess(const thrust::host_vector<T> &data)
     std::vector<V> result(data.size());
     float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
     thrust::transform(data.cbegin(), data.cend(), result.begin(),
-        [divider](const T& x){ return static_cast<V>(x / divider); });
+                      [divider](const T &x)
+                      { return static_cast<V>(x / divider); });
     return result;
 }
 

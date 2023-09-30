@@ -14,9 +14,10 @@ using namespace pybind11::literals;
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(multitaper_measurement, m) {
+PYBIND11_MODULE(multitaper_measurement, m)
+{
     py::class_<Measurement>(m, "PsdMeasurer", py::module_local())
-        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, int, const char*>(), output_and_gil_guard())
+        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, int, const char *>(), output_and_gil_guard())
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
         .def("measure", &Measurement::measure, output_and_gil_guard())

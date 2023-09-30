@@ -8,7 +8,6 @@ template <typename Iterator>
 class strided_range
 {
 public:
-
     typedef typename thrust::iterator_difference<Iterator>::type difference_type;
 
     struct stride_functor : public thrust::unary_function<difference_type, difference_type>
@@ -19,15 +18,16 @@ public:
             : stride(stride) {}
 
         __host__ __device__
-            difference_type operator()(const difference_type& i) const
+            difference_type
+            operator()(const difference_type &i) const
         {
             return stride * i;
         }
     };
 
-    typedef typename thrust::counting_iterator<difference_type>                   CountingIterator;
+    typedef typename thrust::counting_iterator<difference_type> CountingIterator;
     typedef typename thrust::transform_iterator<stride_functor, CountingIterator> TransformIterator;
-    typedef typename thrust::permutation_iterator<Iterator, TransformIterator>     PermutationIterator;
+    typedef typename thrust::permutation_iterator<Iterator, TransformIterator> PermutationIterator;
 
     // type of the strided_range iterator
     typedef PermutationIterator iterator;

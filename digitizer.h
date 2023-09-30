@@ -12,12 +12,13 @@
 #include "regs.h"
 #include "dsp.cuh"
 
-typedef std::function<void(int8_t*)> proc_t;
+typedef std::function<void(int8_t *)> proc_t;
 
-class Digitizer {
+class Digitizer
+{
     drv_handle handle;
     int32 slot;
-    int8_t* buffer;
+    int8_t *buffer;
     size_t buffersize;
     char errortext[ERRORTEXTLEN];
     bool created_here = false;
@@ -26,9 +27,9 @@ class Digitizer {
 
 public:
     /* Constructors */
-    Digitizer(void* h);
+    Digitizer(void *h);
 
-    Digitizer(const char* addr);
+    Digitizer(const char *addr);
 
     ~Digitizer();
 
@@ -39,19 +40,19 @@ public:
 
     size_t getMemsize();
 
-    int8_t* getBuffer();
+    int8_t *getBuffer();
 
     size_t getSegmentSize();
 
     int getSegmentsNumber();
 
-    void* getHandle();
+    void *getHandle();
 
     /* Setters */
     void setBuffer(int8_t *buf, size_t buffersize);
 
     /* Setup */
-    void setupChannels(const int* channels, const int* amplitudes, int size);
+    void setupChannels(const int *channels, const int *amplitudes, int size);
 
     void antialiasing(bool flag);
 
@@ -81,11 +82,12 @@ public:
     void stopCard();
 
     /* Operators */
-    friend std::ostream& operator<<(std::ostream& out, const Digitizer& dig) {
+    friend std::ostream &operator<<(std::ostream &out, const Digitizer &dig)
+    {
         return out << "digitizer in PXIe slot #" << dig.slot;
     };
 
     int64_t getTriggerCounter();
 };
 
-#endif //CPPMEASUREMENT_DIGITIZER_H
+#endif // CPPMEASUREMENT_DIGITIZER_H

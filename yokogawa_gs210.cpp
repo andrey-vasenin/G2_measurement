@@ -3,7 +3,7 @@
 #include <format>
 #include <cstring>
 
-yokogawa_gs210::yokogawa_gs210(const char* addr)
+yokogawa_gs210::yokogawa_gs210(const char *addr)
 {
 	// Assign the address of your instrument to the variable
 	VISA_ADDRESS = new char[100];
@@ -25,7 +25,7 @@ yokogawa_gs210::yokogawa_gs210(const char* addr)
 yokogawa_gs210::~yokogawa_gs210()
 {
 	// remove pointers to the dynamic memory
-	delete [] VISA_ADDRESS;
+	delete[] VISA_ADDRESS;
 	// Close the connection to the instrument
 	viClose(session);
 	viClose(resourceManager);
@@ -58,7 +58,7 @@ void yokogawa_gs210::check_status()
 	}
 }
 
-double yokogawa_gs210::read_double(const char* command)
+double yokogawa_gs210::read_double(const char *command)
 {
 	ViReal64 value;
 	viPrintf(session, command);
@@ -66,10 +66,10 @@ double yokogawa_gs210::read_double(const char* command)
 	return value;
 }
 
-std::string yokogawa_gs210::read_string(const char* command)
+std::string yokogawa_gs210::read_string(const char *command)
 {
 	viPrintf(session, "*IDN?\n");
 	ViChar idnResponse[100];
 	viScanf(session, "%t", idnResponse);
-	return std::string{ idnResponse };
+	return std::string{idnResponse};
 }
