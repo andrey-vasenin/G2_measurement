@@ -155,7 +155,7 @@ void Measurement::measureTest()
 void Measurement::setTestInput(const std::vector<int8_t>& input)
 {
     if (input.size() < 2 * segment_size)
-        throw std::runtime_error("Number of element in the imput array "
+        throw std::runtime_error("Number of element in the input array "
                                  "must be larger or equal to the two segment sizes");
     test_input = tile(input, batch_size);
 }
@@ -168,7 +168,7 @@ stdvec_c Measurement::getMeanField()
 
 stdvec Measurement::getMeanPower()
 {
-    auto power_form_gpu = processor->getCumulativePower();
+    auto power_form_gpu = processor->getCumulativePower(); 
     return postprocess(power_form_gpu);
 }
 
@@ -328,12 +328,12 @@ void Measurement::free()
 {
     delete processor;
     delete dig;
-    processor = NULL;
-    dig = NULL;
+    processor = nullptr;
+    dig = nullptr;
 }
 
 Measurement::~Measurement()
 {
-    if ((processor != NULL) || (dig != NULL))
-        this->free();
+    if ((processor != nullptr) || (dig != nullptr))
+        free();
 }
