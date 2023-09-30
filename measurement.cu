@@ -6,6 +6,7 @@
 #include <iostream>
 #include <functional>
 #include <vector>
+#include <span>
 #include <numeric>
 #include <complex>
 #include <cstdint>
@@ -42,7 +43,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
 
     int trace_length = processor->getTraceLength();
 
-    test_input = new int8_t[notify_size * 2];
+    test_input.resize(notify_size * 2);
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
@@ -147,23 +148,16 @@ void Measurement::measureWithCoil()
 void Measurement::measureTest()
 {
     for (uint32_t i = 0; i < iters_num; i++)
-        func(&test_input[0]);
+        func(test_input.data());
     iters_done += iters_num;
 }
 
-void Measurement::setTestInput(py::buffer input)
+void Measurement::setTestInput(const std::vector<int8_t>& input)
 {
-    py::buffer_info info = input.request();
-    if (info.ndim != 1)
-        throw std::runtime_error("Number of dimensions must be one");
-    if (static_cast<size_t>(info.size) < 2 * segment_size)
+    if (input.size() < 2 * segment_size)
         throw std::runtime_error("Number of element in the imput array "
                                  "must be larger or equal to the two segment sizes");
-
-    int8_t *input_ptr = (int8_t *)info.ptr;
-    tiled_range<int8_t *> tiled_input(input_ptr, input_ptr + 2 * segment_size, batch_size);
-    std::vector<int8_t> test_inp(test_input, test_input + 2 * notify_size);
-    thrust::copy(tiled_input.begin(), tiled_input.end(), test_inp.begin());
+    test_input = tile(input, batch_size);
 }
 
 stdvec_c Measurement::getMeanField()
@@ -336,7 +330,6 @@ void Measurement::free()
     delete dig;
     processor = NULL;
     dig = NULL;
-    delete[] test_input;
 }
 
 Measurement::~Measurement()

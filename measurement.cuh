@@ -33,7 +33,7 @@ private:
 
     float max = 0.f;
 
-    hostbuf test_input;
+    thrust::host_vector<int8_t> test_input;
 
     proc_t func;
     proc_t func_ult_calib;
@@ -75,7 +75,7 @@ public:
 
     void measureTest();
 
-    void setTestInput(py::buffer input);
+    void setTestInput(const std::vector<int8_t>& input);
 
     stdvec_c getMeanField();
 
