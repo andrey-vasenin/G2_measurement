@@ -75,7 +75,7 @@ void Measurement::setAmplitude(int ampl)
 /* Use frequency in GHz */
 void Measurement::setIntermediateFrequency(float frequency)
 {
-    int oversampling = (int)std::round(1.25E+9f / dig->getSamplingRate());
+    int oversampling = static_cast<int>(std::round(1.25E+9 / sampling_rate));
     processor->setIntermediateFrequency(frequency, oversampling);
     cudaDeviceSynchronize();
 }
@@ -162,56 +162,32 @@ void Measurement::setTestInput(const std::vector<int8_t>& input)
 
 stdvec_c Measurement::getMeanField()
 {
-    auto field_form_gpu = processor->getCumulativeField();
-    return postprocess(field_form_gpu);
+    return postprocess(processor->getCumulativeField());
 }
 
 stdvec Measurement::getMeanPower()
 {
-    auto power_form_gpu = processor->getCumulativePower(); 
-    return postprocess(power_form_gpu);
-}
-
-stdvec Measurement::postprocess(hostvec &data)
-{
-    using namespace thrust::placeholders;
-    stdvec result(data.size());
-    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
-    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
-    return result;
-}
-
-stdvec_c Measurement::postprocess(hostvec_c &data)
-{
-    using namespace thrust::placeholders;
-    stdvec_c result(data.size());
-    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
-    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
-    return result;
+    return postprocess(processor->getCumulativePower());
 }
 
 stdvec Measurement::getPSD()
 {
-    auto psd_spectrum = processor->getPowerSpectrum();
-    return postprocess(psd_spectrum);
+    return postprocess(processor->getPowerSpectrum());
 }
 
 stdvec_c Measurement::getDataSpectrum()
 {
-    auto data_spectrum = processor->getDataSpectrum();
-    return postprocess(data_spectrum);
+    return postprocess(processor->getDataSpectrum());
 }
 
 stdvec_c Measurement::getNoiseSpectrum()
 {
-    auto noise_spectrum = processor->getNoiseSpectrum();
-    return postprocess(noise_spectrum);
+    return postprocess(processor->getNoiseSpectrum());
 }
 
 stdvec Measurement::getPeriodogram()
 {
-    auto periodogram = processor->getPeriodogram();
-    return postprocess(periodogram);
+    return postprocess(processor->getPeriodogram());
 }
 
 std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator()
@@ -275,14 +251,12 @@ void Measurement::setSubtractionTrace(stdvec_c trace, stdvec_c offsets)
 
 stdvec_c Measurement::getSubtractionData()
 {
-    auto subtr_data_from_gpu = processor->getCumulativeSubtrData();
-    return postprocess(subtr_data_from_gpu);
+    return postprocess(processor->getCumulativeSubtrData());
 }
 
 stdvec_c Measurement::getSubtractionNoise()
 {
-    auto subtr_noise_from_gpu = processor->getCumulativeSubtrNoise();
-    return postprocess(subtr_noise_from_gpu);
+    return postprocess(processor->getCumulativeSubtrNoise());
 }
 
 py::tuple Measurement::getSubtractionTrace()
@@ -309,6 +283,24 @@ std::vector<std::vector<float>> Measurement::getDPSSTapers()
         std::copy(tapers[i].begin(), tapers[i].end(), result[i].begin());
     }
 
+    return result;
+}
+
+stdvec Measurement::postprocess(hostvec &data)
+{
+    using namespace thrust::placeholders;
+    stdvec result(data.size());
+    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
+    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
+    return result;
+}
+
+stdvec_c Measurement::postprocess(hostvec_c &data)
+{
+    using namespace thrust::placeholders;
+    stdvec_c result(data.size());
+    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
+    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
     return result;
 }
 
