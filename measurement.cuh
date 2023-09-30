@@ -114,8 +114,8 @@ public:
 protected:
     void initializeBuffer();
 
-    stdvec postprocess(hostvec& data);
-    stdvec_c postprocess(hostvec_c& data);
+    template <typename T, typename V>
+    std::vector<V> postprocess(const thrust::host_vector<T> &data);
 
     template <template <typename, typename...> class Container, typename T, typename... Args>
     thrust::host_vector<T> tile(const Container<T, Args...>& data, size_t N);

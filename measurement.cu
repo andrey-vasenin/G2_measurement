@@ -162,32 +162,32 @@ void Measurement::setTestInput(const std::vector<int8_t>& input)
 
 stdvec_c Measurement::getMeanField()
 {
-    return postprocess(processor->getCumulativeField());
+    return postprocess<tcf, std::complex<float>>(processor->getCumulativeField());
 }
 
 stdvec Measurement::getMeanPower()
 {
-    return postprocess(processor->getCumulativePower());
+    return postprocess<float, float>(processor->getCumulativePower());
 }
 
 stdvec Measurement::getPSD()
 {
-    return postprocess(processor->getPowerSpectrum());
+    return postprocess<float, float>(processor->getPowerSpectrum());
 }
 
 stdvec_c Measurement::getDataSpectrum()
 {
-    return postprocess(processor->getDataSpectrum());
+    return postprocess<tcf, std::complex<float>>(processor->getDataSpectrum());
 }
 
 stdvec_c Measurement::getNoiseSpectrum()
 {
-    return postprocess(processor->getNoiseSpectrum());
+    return postprocess<tcf, std::complex<float>>(processor->getNoiseSpectrum());
 }
 
 stdvec Measurement::getPeriodogram()
 {
-    return postprocess(processor->getPeriodogram());
+    return postprocess<float, float>(processor->getPeriodogram());
 }
 
 std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator()
@@ -251,12 +251,12 @@ void Measurement::setSubtractionTrace(stdvec_c trace, stdvec_c offsets)
 
 stdvec_c Measurement::getSubtractionData()
 {
-    return postprocess(processor->getCumulativeSubtrData());
+    return postprocess<tcf, std::complex<float>>(processor->getCumulativeSubtrData());
 }
 
 stdvec_c Measurement::getSubtractionNoise()
 {
-    return postprocess(processor->getCumulativeSubtrNoise());
+    return postprocess<tcf, std::complex<float>>(processor->getCumulativeSubtrNoise());
 }
 
 py::tuple Measurement::getSubtractionTrace()
@@ -286,21 +286,13 @@ std::vector<std::vector<float>> Measurement::getDPSSTapers()
     return result;
 }
 
-stdvec Measurement::postprocess(hostvec &data)
+template <typename T, typename V>
+std::vector<V> Measurement::postprocess(const thrust::host_vector<T> &data)
 {
-    using namespace thrust::placeholders;
-    stdvec result(data.size());
+    std::vector<V> result(data.size());
     float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
-    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
-    return result;
-}
-
-stdvec_c Measurement::postprocess(hostvec_c &data)
-{
-    using namespace thrust::placeholders;
-    stdvec_c result(data.size());
-    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
-    thrust::transform(data.begin(), data.end(), result.begin(), _1 / divider);
+    thrust::transform(data.cbegin(), data.cend(), result.begin(),
+        [divider](const T& x){ return static_cast<V>(x / divider); });
     return result;
 }
 
