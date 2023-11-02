@@ -3,3 +3,7 @@ build
 .vscode
 *.bat
 *.dll
+.vs
+eigen-3.4.0
+old_files
+x64
