@@ -9,10 +9,12 @@
 #include <cstdint>
 #include "digitizer.h"
 #include "dsp.cuh"
+#include "pinned_allocator.cuh"
 #include <pybind11/pybind11.h>
 #include "yokogawa_gs210.h"
 
 namespace py = pybind11;
+typedef std::vector<int8_t, PinnedAllocator<int8_t>> hostbuf;
 
 class Measurement
 {
@@ -27,6 +29,7 @@ private:
     uint64_t iters_num;
     uint64_t iters_done;
     double sampling_rate;
+    hostbuf buffer;
 
     float offset_current = 0.f;
     float working_current = 0.f;
@@ -89,7 +92,7 @@ public:
 
     stdvec getPeriodogram();
 
-    std::vector<std::vector<std::complex<double>>> getCorrelator();
+    std::vector<std::vector<std::complex<float>>> getCorrelator();
 
     stdvec_c getSubtractionData();
 
