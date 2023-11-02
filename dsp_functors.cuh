@@ -51,6 +51,15 @@ struct power_functor
     }
 };
 
+struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, tcf>
+{   
+
+    __device__ inline __forceinline__ tcf operator()(const tcf &x, const tcf &y)
+    {
+        return thrust::conj(x) * y;
+    }
+};
+
 struct downconv_functor : public thrust::binary_function<const tcf &, const tcf &, tcf>
 {
     __device__ inline __forceinline__

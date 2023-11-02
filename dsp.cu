@@ -85,10 +85,12 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
                                                        pitch{len}             // Segment length in a buffer
 
 {
-    // firwin.resize(total_length); // GPU memory for the filtering window
     subtraction_trace.resize(total_length, tcf(0.f));
     subtraction_offs.resize(total_length, tcf(0.f));
     downconversion_coeffs.resize(total_length, tcf(0.f));
+    firwin.resize(total_length); // GPU memory for the filtering window
+    corr_firwin[0].resize(total_length);
+    corr_firwin[1].resize(total_length);
 
     // Setup multitaper
     K = K_;
@@ -105,12 +107,6 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         // Allocate arrays on GPU for every stream
         gpu_data_buf[i].resize(2 * total_length, '\0');
         gpu_noise_buf[i].resize(2 * total_length, '\0');
-        data[i].resize(total_length, tcf(0.f));
-        data_resampled[i].resize(resampled_total_length, tcf(0.f));
-        subtraction_data[i].resize(total_length, tcf(0.f));
-        noise[i].resize(total_length, tcf(0.f));
-        noise_resampled[i].resize(resampled_total_length, tcf(0.f));
-        subtraction_noise[i].resize(total_length, tcf(0.f));
         power[i].resize(total_length, 0.f);
         field[i].resize(total_length, tcf(0.f));
         // out[i].resize(out_size, tcf(0.f));
@@ -120,6 +116,23 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         noise_fft[i].resize(resampled_total_length, tcf(0.f));
         spectrum[i].resize(resampled_total_length, 0.f);
         periodogram[i].resize(total_length, 0.f);
+        host_inter_buf.resize(2 * batch_size * pitch);
+
+        // Allocate arrays on GPU for every channel of digitizer
+        for (int j = 0; j < num_channels; j++)
+        {
+            data[j][i].resize(total_length);
+            data_resampled[j][i].resize(resampled_total_length);
+            subtraction_data[j][i].resize(total_length);
+            noise[j][i].resize(total_length);
+            noise_resampled[j][i].resize(resampled_total_length);
+            subtraction_noise[j][i].resize(total_length);
+        }
+        g1_out[i].resize(out_size);
+        g2_out[i].resize(out_size);
+        g2_out_filtered[i].resize(out_size);
+        data_for_correlation[0][i].resize(total_length);
+        data_for_correlation[1][i].resize(total_length);
 
         // Initialize cuFFT plans
         check_cufft_error(cufftPlan1d(&plans[i], static_cast<int>(trace_length),
@@ -167,8 +180,21 @@ dsp::~dsp()
     }
 }
 
-// Creates a rectangular window with specified cutoff frequencies for the further usage in a filter
+// Set filtering window for digital processing
 void dsp::setFirwin(float cutoff_l, float cutoff_r, int oversampling)
+{
+    makeFilterWindow(cutoff_l, cutoff_r, firwin, oversampling);
+}
+
+// Set filtering window for digital processing before G2 calculations
+void dsp::setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2], int oversampling)
+{
+    makeFilterWindow(cutoff_1[0], cutoff_1[1], corr_firwin[0], oversampling);
+    makeFilterWindow(cutoff_2[0], cutoff_2[1], corr_firwin[1], oversampling);
+}
+
+// Creates a rectangular window with specified cutoff frequencies for the further usage in a filter
+void dsp::makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, int oversampling)
 {
     using namespace std::complex_literals;
     hostvec_c hFirwin(total_length);
@@ -180,7 +206,7 @@ void dsp::setFirwin(float cutoff_l, float cutoff_r, int oversampling)
         int j = i % trace_length;
         hFirwin[i] = ((j < l_idx) || (j > r_idx)) ? 0if : 1.0f + 0if;
     }
-    firwin = hFirwin;
+    window = hFirwin;
 }
 
 // Error handler
@@ -244,8 +270,16 @@ void dsp::resetOutput()
         thrust::fill(periodogram[i].begin(), periodogram[i].end(), 0.f);
         thrust::fill(data_fft[i].begin(), data_fft[i].end(), tcf(0));
         thrust::fill(noise_fft[i].begin(), noise_fft[i].end(), tcf(0));
-        thrust::fill(subtraction_data[i].begin(), subtraction_data[i].end(), tcf(0));
-        thrust::fill(subtraction_noise[i].begin(), subtraction_noise[i].end(), tcf(0));
+        for (int j = 0; j < num_channels; j++)
+        {
+            thrust::fill(subtraction_data[j][i].begin(), subtraction_data[j][i].end(), tcf(0));
+            thrust::fill(subtraction_noise[j][i].begin(), subtraction_noise[j][i].end(), tcf(0));
+        }
+        thrust::fill(g1_out[i].begin(), g1_out[i].end(), tcf(0));
+        thrust::fill(g2_out[i].begin(), g2_out[i].end(), tcf(0));
+        thrust::fill(g2_out_filtered[i].begin(), g2_out[i].end(), tcf(0));
+        thrust::fill(data_for_correlation[0][i].begin(), data_for_correlation[0][i].begin(), tcf(0));
+        thrust::fill(data_for_correlation[1][i].begin(), data_for_correlation[0][i].begin(), tcf(0));
     }
 }
 
@@ -253,33 +287,52 @@ void dsp::compute(const hostbuf buffer_ptr)
 {
     const int stream_num = semaphore;
     switchStream();
-    loadDataToGPUwithPitchAndOffset(buffer_ptr, gpu_data_buf[stream_num], pitch, trace1_start, stream_num);
-    loadDataToGPUwithPitchAndOffset(buffer_ptr, gpu_noise_buf[stream_num], pitch, trace2_start, stream_num);
-    convertDataToMillivolts(data[stream_num], gpu_data_buf[stream_num], streams[stream_num]); // error is here
-    convertDataToMillivolts(noise[stream_num], gpu_noise_buf[stream_num], streams[stream_num]);
-    applyDownConversionCalibration(data[stream_num], streams[stream_num]);
-    applyDownConversionCalibration(noise[stream_num], streams[stream_num]);
-    applyFilter(data[stream_num], firwin, stream_num);
-    applyFilter(noise[stream_num], firwin, stream_num);
-    downconvert(data[stream_num], stream_num);
-    downconvert(noise[stream_num], stream_num);
+    for (int i = 0; i < num_channels; i++)
+    {
+        divideDataFromDifferentChannels(buffer_ptr, host_inter_buf, i, stream_num);
+        loadDataToGPUwithPitchAndOffset(host_inter_buf_ptr, gpu_data_buf[stream_num], pitch, trace1_start, stream_num);
+        loadDataToGPUwithPitchAndOffset(host_inter_buf_ptr, gpu_noise_buf[stream_num], pitch, trace2_start, stream_num);
 
-    subtractDataFromOutput(subtraction_trace, data[stream_num], stream_num);
-    subtractDataFromOutput(subtraction_offs, noise[stream_num], stream_num);
+        convertDataToMillivolts(data[i][stream_num], gpu_data_buf[stream_num], streams[stream_num]);
+        convertDataToMillivolts(noise[i][stream_num], gpu_noise_buf[stream_num], streams[stream_num]);
 
-    addDataToOutput(data[stream_num], subtraction_data[stream_num], stream_num);
-    addDataToOutput(noise[stream_num], subtraction_noise[stream_num], stream_num);
+        applyDownConversionCalibration(data[i][stream_num], streams[stream_num]);
+        applyDownConversionCalibration(noise[i][stream_num], streams[stream_num]);
 
-    calculateField(data[stream_num], noise[stream_num],
+        applyFilter(data[i][stream_num], firwin, stream_num);
+        applyFilter(noise[i][stream_num], firwin, stream_num);
+
+        downconvert(data[i][stream_num], stream_num);
+        downconvert(noise[i][stream_num], stream_num);
+
+        // subtractDataFromOutput(subtraction_trace, data[i][stream_num], stream_num);
+        // subtractDataFromOutput(subtraction_offs, noise[i][stream_num], stream_num);
+
+        // addDataToOutput(data[i][stream_num], subtraction_data[i][stream_num], stream_num);
+        // addDataToOutput(noise[i][stream_num], subtraction_noise[i][stream_num], stream_num);
+    }
+    calculateField(data[0][stream_num], noise[0][stream_num],
                    field[stream_num], streams[stream_num]);
-    calculatePower(data[stream_num], noise[stream_num], power[stream_num], streams[stream_num]);
-    // calculateG1(data_calibrated[stream_num], noise_calibrated[stream_num],
-    //     out[stream_num], cublas_handles[stream_num]);
-    resampleFFT(data[stream_num], data_resampled[stream_num], stream_num);
-    resampleFFT(noise[stream_num], noise_resampled[stream_num], stream_num);
-    calculateMultitaperSpectrum(data_resampled[stream_num], noise_resampled[stream_num],
+    calculatePower(data[0][stream_num], noise[0][stream_num], power[stream_num], streams[stream_num]);
+    calculateG1(data[0][stream_num], noise[0][stream_num],
+                g1_out[stream_num], cublas_handles[stream_num]);
+
+    // Example of calculateG2 usage
+    for (int i = 0; i < 2; i++)
+    {
+        data_for_correlation[i][stream_num] = data[0][stream_num];
+        applyFilter(data_for_correlation[i][stream_num], corr_firwin[i], stream_num);
+    }
+    calculateG2(data_for_correlation[0][stream_num], data_for_correlation[1][stream_num], g2_out_filtered[stream_num],
+                streams[stream_num], cublas_handles[stream_num]);
+    calculateG2(data[0][stream_num], data[1][stream_num], g2_out[stream_num],
+                streams[stream_num], cublas_handles[stream_num]);
+
+    resampleFFT(data[0][stream_num], data_resampled[0][stream_num], stream_num);
+    resampleFFT(noise[0][stream_num], noise_resampled[0][stream_num], stream_num);
+    calculateMultitaperSpectrum(data_resampled[0][stream_num], noise_resampled[0][stream_num],
                                 data_fft[stream_num], noise_fft[stream_num], spectrum[stream_num], stream_num);
-    calculatePeriodogram(data[stream_num], noise[stream_num],
+    calculatePeriodogram(data[0][stream_num], noise[0][stream_num],
                          periodogram[stream_num], stream_num);
 }
 
@@ -287,13 +340,26 @@ void dsp::compute(const hostbuf buffer_ptr)
 void dsp::loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
                                           gpubuf &gpu_buf, size_t pitch, size_t offset, int stream_num)
 {
-    size_t width = 2 * size_t(trace_length) * sizeof(int8_t);
-    size_t src_pitch = 2 * pitch * sizeof(int8_t);
+    size_t width = 2 * num_channels * size_t(trace_length) * sizeof(int8_t);
+    size_t src_pitch = 2 * num_channels * pitch * sizeof(int8_t);
     size_t dst_pitch = width;
-    size_t shift = 2 * offset;
+    size_t shift = 2 * num_channels * offset;
     handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(gpu_buf.data()), dst_pitch,
                                   static_cast<const void *>(buffer_ptr + shift), src_pitch, width, batch_size,
                                   cudaMemcpyHostToDevice, streams[stream_num]));
+}
+
+void dsp::divideDataFromDifferentChannels(const hostbuf buffer_ptr,
+                                          thrust::host_vector<int8_t> &dst, size_t offset, int stream_num)
+{
+    size_t width = 2 * sizeof(int8_t);
+    size_t src_pitch = 2 * num_channels * sizeof(int8_t);
+    size_t dst_pitch = width;
+    size_t shift = 2 * num_channels * offset;
+    size_t height = batch_size * trace_length;
+    handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
+                                  static_cast<const void *>(buffer_ptr + shift), src_pitch, width, height,
+                                  cudaMemcpyHostToHost, streams[stream_num]));
 }
 
 // Converts bytes into 32-bit floats with mV dimensionality
@@ -439,6 +505,7 @@ void dsp::calculatePower(const gpuvec_c &data, const gpuvec_c &noise, gpuvec &ou
                      thrust::make_zip_function(power_functor()));
 }
 
+// Calculates first-order correlation function for signal with noise subtraction
 void dsp::calculateG1(gpuvec_c &data, gpuvec_c &noise, gpuvec_c &output, cublasHandle_t &handle)
 {
     using namespace std::string_literals;
@@ -462,6 +529,29 @@ void dsp::calculateG1(gpuvec_c &data, gpuvec_c &noise, gpuvec_c &output, cublasH
     // Check for errors
     check_cublas_error(cublas_status,
                        "Error of rank-1 update (noise) with code #"s + std::to_string(cublas_status));
+}
+
+// Calculate second-order correlation function.
+// Could be used for calculating correlations between filtered signals.
+// For this use dsp::makeFilterWindow and dsp::applyFilter before calling this method.
+void dsp::calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle)
+{
+    gpuvec_c crossPower(total_length, tcf(0)); // contains cross-channel power of signal
+    thrust::transform(thrust::cuda::par_nosync.on(stream),
+                      data_1.begin(), data_1.end(), data_2.begin(), crossPower.begin(), cross_power_functor());
+    // Calculating G2 as two-time cross power correlation
+    using namespace std::string_literals;
+    float alpha_data = 1;
+    float beta = 1;
+    auto cublas_status = cublasCsyrk(handle,
+                                     CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, trace_length, batch_size,
+                                     reinterpret_cast<cuComplex *>(&alpha_data),
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(crossPower.data())), trace_length,
+                                     reinterpret_cast<cuComplex *>(&beta),
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), trace_length);
+    // Check for errors
+    check_cublas_error(cublas_status,
+                       "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
 }
 
 void dsp::calculatePeriodogram(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, int stream_num)
@@ -528,11 +618,28 @@ thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T> *t
     return host_trace;
 }
 
-// Returns the average value
-hostvec_c dsp::getCorrelator()
+gpuvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
 {
-    return getCumulativeTrace(out);
+    gpuvec_c c(g_out[0].size(), tcf(0));
+    this->handleError(cudaDeviceSynchronize());
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(g_out[i].begin(), g_out[i].end(), c.begin(), c.begin(), thrust::plus<tcf>());
+    return c;
 }
+
+void dsp::getG1results(hostvec_c &result)
+{
+    result = getCumulativeCorrelator(g1_out);
+}
+
+void dsp::getG2FullResults(hostvec_c &result)
+{
+    result = getCumulativeCorrelator(g2_out);
+}
+
+void dsp::getG2FilteredResults(hostvec_c &result)
+{
+    result = getCumulativeCorrelator(g2_out_filtered);
 
 // Returns the cumulative power
 hostvec dsp::getCumulativePower()
@@ -568,12 +675,12 @@ hostvec_c dsp::getCumulativeField()
 
 hostvec_c dsp::getCumulativeSubtrData()
 {
-    return getCumulativeTrace(subtraction_data);
+    return getCumulativeTrace(subtraction_data[0]);
 }
 
 hostvec_c dsp::getCumulativeSubtrNoise()
 {
-    return getCumulativeTrace(subtraction_noise);
+    return getCumulativeTrace(subtraction_noise[0]);
 }
 
 // Returns the useful length of the data in a segment

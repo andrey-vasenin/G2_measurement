@@ -66,6 +66,8 @@ public:
 
     void setFirwin(float left_cutoff, float right_cutoff);
 
+    void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2]);
+
     void setTapers(std::vector<stdvec> tapers);
 
     void setIntermediateFrequency(float frequency);
@@ -91,14 +93,16 @@ public:
     stdvec_c getNoiseSpectrum();
 
     stdvec getPeriodogram();
-
-    std::vector<std::vector<std::complex<float>>> getCorrelator();
+  
+    std::vector<std::vector<std::complex<double>>> getCorrelator(string request);
 
     stdvec_c getSubtractionData();
 
     stdvec_c getSubtractionNoise();
 
-    stdvec_c getRawCorrelator();
+    stdvec_c getRawG1();
+
+    stdvec_c getRawG2();
 
     void setSubtractionTrace(stdvec_c trace, stdvec_c offsets);
 

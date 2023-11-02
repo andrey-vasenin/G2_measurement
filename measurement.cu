@@ -130,6 +130,13 @@ void Measurement::setFirwin(float left_cutoff, float right_cutoff)
     cudaDeviceSynchronize();
 }
 
+void Measurement::setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2])
+{
+    int oversampling = static_cast<int>(std::round(1.25E+9f / dig->getSamplingRate()));
+    processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
+    cudaDeviceSynchronize();
+}
+
 void Measurement::measure()
 {
     dig->prepareFifo(static_cast<unsigned long>(notify_size));
@@ -216,14 +223,38 @@ stdvec Measurement::getPeriodogram()
     return postprocess<float, float>(processor->getPeriodogram());
 }
 
-std::vector<std::vector<std::complex<float>>> Measurement::getCorrelator()
+std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(string request)
 {
-    auto corr = postprocess<tcf, std::complex<float>>(processor->getCorrelator());
+    int len = processor->getOutSize();
+    int side = processor->getTraceLength();
 
-    // Convert the correlator into a matrix and fill-in a lower triangle with conjugate values
-    int side = static_cast<int>(std::round(std::sqrt(static_cast<double>(corr.size()))));
-    std::vector<std::vector<std::complex<float>>> average_result(
-        side, std::vector<std::complex<float>>(side, 0.));
+    hostvec_c result(len);
+    std::vector<std::vector<std::complex<double>>> average_result(
+        side, std::vector<std::complex<double>>(side));
+
+    // Receive data from GPU
+    if (request == "g1")
+    {
+        processor->getG1results(result);
+    }
+    elif (request == "g2_full")
+    {
+        processor->getG2FullResults(result);
+    }
+    elif (request == "g2_filteted")
+    {
+        processor->getG2FilteredResults(result);
+    }
+    else
+    {
+        std::cerr << "Request is not correct";
+        return 1;
+    }
+    
+    // Divide the data by a number of traces measured
+    int k = 0;
+    tcf X((iters_done > 0) ? static_cast<float>(iters_done * batch_size) : 1.f, 0.f);
+  
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = t1; t2 < side; t2++)
         {
@@ -234,9 +265,30 @@ std::vector<std::vector<std::complex<float>>> Measurement::getCorrelator()
     return average_result;
 }
 
-stdvec_c Measurement::getRawCorrelator()
+stdvec_c Measurement::getRawG1()
 {
-    return postprocess<tcf, std::complex<float>>(processor->getCorrelator());
+    int len = processor->getOutSize();
+    int side = processor->getTraceLength();
+
+    hostvec_c result(len);
+
+    // Receive data from GPU
+    processor->getG1results(result);
+
+    return stdvec_c(result.begin(), result.end());
+}
+
+stdvec_c Measurement::getRawG2()
+{
+    int len = processor->getOutSize();
+    int side = processor->getTraceLength();
+
+    hostvec_c result(len);
+
+    // Receive data from GPU
+    processor->getG2FullResults(result);
+
+    return stdvec_c(result.begin(), result.end());
 }
 
 void Measurement::setSubtractionTrace(stdvec_c trace, stdvec_c offsets)
