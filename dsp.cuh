@@ -30,7 +30,6 @@ typedef thrust::device_vector<char> gpubuf;
 // typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
 //     thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
 // typedef hostbuf::iterator hostbuf_iter_t;
-typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
 
@@ -54,9 +53,6 @@ inline Npp32f *to_Npp32f_p(T *v)
 
 class dsp
 {
-    /* Pointer */
-    hostbuf buffer;
-
     /* Pointers to arrays with data */
     gpubuf gpu_data_buf[num_streams];  // buffers for loading data
     gpubuf gpu_noise_buf[num_streams]; // buffers for loading data
@@ -156,7 +152,7 @@ public:
     hostvec_c getCumulativeSubtrData();
 
     hostvec_c getCumulativeSubtrNoise();
-
+  
     gpuvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
     void getG1results(hostvec_c &result);
@@ -173,13 +169,7 @@ public:
 
     void resetSubtractionTrace();
 
-    void createBuffer(size_t size);
-
-    void deleteBuffer();
-
     void setIntermediateFrequency(float frequency, int oversampling);
-
-    hostbuf getBuffer();
 
     void setAmplitude(int ampl);
 

@@ -85,13 +85,12 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
                                                        pitch{len}             // Segment length in a buffer
 
 {
+    subtraction_trace.resize(total_length, tcf(0.f));
+    subtraction_offs.resize(total_length, tcf(0.f));
+    downconversion_coeffs.resize(total_length, tcf(0.f));
     firwin.resize(total_length); // GPU memory for the filtering window
     corr_firwin[0].resize(total_length);
     corr_firwin[1].resize(total_length);
-    subtraction_trace.resize(total_length);
-    subtraction_offs.resize(total_length);
-    thrust::fill(subtraction_trace.begin(), subtraction_trace.end(), tcf(0.f));
-    downconversion_coeffs.resize(total_length);
 
     // Setup multitaper
     K = K_;
@@ -106,8 +105,17 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         streamContexts[i].hStream = streams[i];
 
         // Allocate arrays on GPU for every stream
-        gpu_data_buf[i].resize(2 * total_length);
-        gpu_noise_buf[i].resize(2 * total_length);
+        gpu_data_buf[i].resize(2 * total_length, '\0');
+        gpu_noise_buf[i].resize(2 * total_length, '\0');
+        power[i].resize(total_length, 0.f);
+        field[i].resize(total_length, tcf(0.f));
+        // out[i].resize(out_size, tcf(0.f));
+        taperedData[i].resize(resampled_total_length, tcf(0.f));
+        taperedNoise[i].resize(resampled_total_length, tcf(0.f));
+        data_fft[i].resize(resampled_total_length, tcf(0.f));
+        noise_fft[i].resize(resampled_total_length, tcf(0.f));
+        spectrum[i].resize(resampled_total_length, 0.f);
+        periodogram[i].resize(total_length, 0.f);
         host_inter_buf.resize(2 * batch_size * pitch);
 
         // Allocate arrays on GPU for every channel of digitizer
@@ -120,19 +128,11 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
             noise_resampled[j][i].resize(resampled_total_length);
             subtraction_noise[j][i].resize(total_length);
         }
-        power[i].resize(total_length);
-        field[i].resize(total_length);
         g1_out[i].resize(out_size);
         g2_out[i].resize(out_size);
         g2_out_filtered[i].resize(out_size);
         data_for_correlation[0][i].resize(total_length);
         data_for_correlation[1][i].resize(total_length);
-        taperedData[i].resize(resampled_total_length);
-        taperedNoise[i].resize(resampled_total_length);
-        data_fft[i].resize(resampled_total_length);
-        noise_fft[i].resize(resampled_total_length);
-        spectrum[i].resize(resampled_total_length);
-        periodogram[i].resize(total_length);
 
         // Initialize cuFFT plans
         check_cufft_error(cufftPlan1d(&plans[i], static_cast<int>(trace_length),
@@ -160,14 +160,11 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         check_cublas_error(cublasSetStream(cublas_handles2[i], streams[i]),
                            "Error assigning a stream to a cuBLAS handle\n");
     }
-    resetOutput();
-    resetSubtractionTrace();
 }
 
 // DSP destructor
 dsp::~dsp()
 {
-    deleteBuffer();
     for (int i = 0; i < num_streams; i++)
     {
         // Destroy cuBLAS
@@ -223,16 +220,6 @@ void dsp::handleError(cudaError_t err)
     }
 }
 
-void dsp::createBuffer(size_t size)
-{
-    this->handleError(cudaMallocHost((void **)&buffer, size));
-}
-
-void dsp::deleteBuffer()
-{
-    this->handleError(cudaFreeHost(buffer));
-};
-
 void dsp::setIntermediateFrequency(float frequency, int oversampling)
 {
     const float pi = std::acos(-1.f);
@@ -271,12 +258,6 @@ void dsp::applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream)
     auto sync_exec_policy = thrust::cuda::par_nosync.on(stream);
     thrust::for_each(sync_exec_policy, data.begin(), data.end(), calibration_functor(a_qi, a_qq, c_i, c_q));
 }
-
-hostbuf dsp::getBuffer()
-{
-    return buffer;
-}
-
 // Fills with zeros the arrays for cumulative field and power in the GPU memory
 void dsp::resetOutput()
 {
@@ -621,8 +602,8 @@ void dsp::calculateMultitaperSpectrum(const gpuvec_c &data, const gpuvec_c &nois
 template <typename T>
 thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T> *traces)
 {
+    handleError(cudaDeviceSynchronize());
     thrust::device_vector<T> tmp(traces->size(), T(0));
-    this->handleError(cudaDeviceSynchronize());
     for (int i = 0; i < num_streams; i++)
         thrust::transform(traces[i].begin(), traces[i].end(), tmp.begin(), tmp.begin(), thrust::plus<T>());
     size_t N = traces->size() / batch_size;
@@ -636,8 +617,6 @@ thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T> *t
     }
     return host_trace;
 }
-
-// Returns the average value
 
 gpuvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
 {
@@ -661,7 +640,6 @@ void dsp::getG2FullResults(hostvec_c &result)
 void dsp::getG2FilteredResults(hostvec_c &result)
 {
     result = getCumulativeCorrelator(g2_out_filtered);
-}
 
 // Returns the cumulative power
 hostvec dsp::getCumulativePower()

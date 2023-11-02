@@ -18,6 +18,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "yokogawa_gs210.h"
+#include <thrust/zip_function.h>
 #include <future>
 #include <thread>
 
@@ -43,7 +44,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
 
     int trace_length = processor->getTraceLength();
 
-    test_input.resize(notify_size * 2);
+    test_input.resize(notify_size * 2, 0);
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
@@ -53,12 +54,37 @@ Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t 
 {
 }
 
+Measurement::~Measurement()
+{
+    if ((processor != nullptr) || (dig != nullptr))
+        free();
+}
+
+void Measurement::free()
+{
+    delete processor;
+    delete dig;
+    processor = nullptr;
+    dig = nullptr;
+}
+
+void Measurement::reset()
+{
+    resetOutput();
+    processor->resetSubtractionTrace();
+}
+
+void Measurement::resetOutput()
+{
+    iters_done = 0;
+    processor->resetOutput();
+}
 void Measurement::initializeBuffer()
 {
     // Create the buffer in page-locked memory
     size_t buffersize = 4 * notify_size;
-    processor->createBuffer(buffersize);
-    dig->setBuffer(processor->getBuffer(), buffersize);
+    buffer.resize(buffersize, 0);
+    dig->setBuffer(buffer.data(), buffersize);
 }
 
 void Measurement::setCurrents(float wc, float oc)
@@ -228,15 +254,14 @@ std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(string
     // Divide the data by a number of traces measured
     int k = 0;
     tcf X((iters_done > 0) ? static_cast<float>(iters_done * batch_size) : 1.f, 0.f);
+  
     for (int t1 = 0; t1 < side; t1++)
-    {
         for (int t2 = t1; t2 < side; t2++)
         {
-            k = t1 * side + t2;
-            average_result[t1][t2] = std::complex<double>(result[k] / X);
+            average_result[t1][t2] = std::complex<float>(corr[t1 * side + t2]);
             average_result[t2][t1] = std::conj(average_result[t1][t2]);
         }
-    }
+        
     return average_result;
 }
 
@@ -264,18 +289,6 @@ stdvec_c Measurement::getRawG2()
     processor->getG2FullResults(result);
 
     return stdvec_c(result.begin(), result.end());
-}
-
-template <template <typename, typename...> class Container, typename T, typename... Args>
-thrust::host_vector<T> Measurement::tile(const Container<T, Args...> &data, size_t N)
-{
-    // data : vector to tile
-    // N : how much to tile
-    using iter_t = typename Container<T, Args...>::const_iterator;
-    thrust::host_vector<T> tiled_data(data.size() * N);
-    tiled_range<iter_t> tiled_iter(data.begin(), data.end(), N);
-    thrust::copy(tiled_iter.begin(), tiled_iter.end(), tiled_data.begin());
-    return tiled_data;
 }
 
 void Measurement::setSubtractionTrace(stdvec_c trace, stdvec_c offsets)
@@ -308,17 +321,13 @@ py::tuple Measurement::getSubtractionTrace()
 std::vector<std::vector<float>> Measurement::getDPSSTapers()
 {
     auto tapers = processor->getDPSSTapers();
-
-    size_t num_rows = tapers.size();
-    size_t num_cols = (num_rows > 0) ? tapers[0].size() : 0;
-
-    std::vector<std::vector<float>> result(num_rows);
-    for (size_t i = 0; i < num_rows; ++i)
-    {
-        result[i].resize(num_cols);
-        std::copy(tapers[i].begin(), tapers[i].end(), result[i].begin());
-    }
-
+    std::vector<std::vector<float>> result(tapers.size());
+    thrust::for_each(thrust::make_zip_iterator(tapers.cbegin(), result.begin()),
+                     thrust::make_zip_iterator(tapers.cend(), result.end()),
+                     thrust::make_zip_function([](const auto &src, auto &dst)
+                                               {
+        dst.resize(src.size());
+        std::copy(src.cbegin(), src.cend(), dst.begin()); }));
     return result;
 }
 
@@ -333,28 +342,14 @@ std::vector<V> Measurement::postprocess(const thrust::host_vector<T> &data)
     return result;
 }
 
-void Measurement::reset()
+template <template <typename, typename...> class Container, typename T, typename... Args>
+thrust::host_vector<T> Measurement::tile(const Container<T, Args...> &data, size_t N)
 {
-    this->resetOutput();
-    processor->resetSubtractionTrace();
-}
-
-void Measurement::resetOutput()
-{
-    iters_done = 0;
-    processor->resetOutput();
-}
-
-void Measurement::free()
-{
-    delete processor;
-    delete dig;
-    processor = nullptr;
-    dig = nullptr;
-}
-
-Measurement::~Measurement()
-{
-    if ((processor != nullptr) || (dig != nullptr))
-        free();
+    // data : vector to tile
+    // N : how much to tile
+    using iter_t = typename Container<T, Args...>::const_iterator;
+    thrust::host_vector<T> tiled_data(data.size() * N);
+    tiled_range<iter_t> tiled_iter(data.begin(), data.end(), N);
+    thrust::copy(tiled_iter.begin(), tiled_iter.end(), tiled_data.begin());
+    return tiled_data;
 }

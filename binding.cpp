@@ -8,7 +8,9 @@
 #include <pybind11/iostream.h>
 #include "measurement.cuh"
 
-using output_and_gil_guard = py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect, py::gil_scoped_release>;
+using output_and_gil_guard = py::call_guard<py::scoped_ostream_redirect,
+                                            py::scoped_estream_redirect,
+                                            py::gil_scoped_release>;
 
 using namespace pybind11::literals;
 
