@@ -19,7 +19,7 @@
 const int num_streams = 4;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
-const int num_channels = 2; // number of used digitizer channels
+const int num_channels = 1; // number of used digitizer channels
 
 typedef thrust::complex<float> tcf;
 typedef thrust::device_vector<float> gpuvec;
@@ -27,9 +27,7 @@ typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
 typedef thrust::device_vector<char> gpubuf;
-// typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
-//     thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
-// typedef hostbuf::iterator hostbuf_iter_t;
+typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
 
@@ -53,11 +51,13 @@ inline Npp32f *to_Npp32f_p(T *v)
 
 class dsp
 {
+    /* Pointer */
+    hostbuf buffer;
+    hostbuf inter_buffer; // intermediate buffer for loading data from different digitizer channels 
+
     /* Pointers to arrays with data */
     gpubuf gpu_data_buf[num_streams];  // buffers for loading data
     gpubuf gpu_noise_buf[num_streams]; // buffers for loading data
-    thrust::host_vector<int8_t> host_inter_buf; // intermediate buffer for loading data from different digitizer channels 
-    int8_t* host_inter_buf_ptr = thrust::raw_pointer_cast(host_inter_buf.data());
     gpuvec_c data[num_channels][num_streams];
     gpuvec_c data_resampled[num_channels][num_streams];
     gpuvec_c data_fft[num_streams];
@@ -75,15 +75,14 @@ class dsp
     gpuvec_c g2_out[num_streams];
     gpuvec_c g2_out_filtered[num_streams];
     gpuvec spectrum[num_streams];
-    gpuvec periodogram[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
     gpuvec_c corr_firwin[2];
 
     /* Subtraction traces */
-    gpuvec_c subtraction_trace;
-    gpuvec_c subtraction_offs;
+    gpuvec_c subtraction_trace[num_channels];
+    gpuvec_c subtraction_offs[num_channels];
 
     /* Downconversion coefficients */
     gpuvec_c downconversion_coeffs;
@@ -94,19 +93,13 @@ private:
     int oversampling;    // determines oversampling after digital filtering
     size_t resampled_trace_length;
     size_t trace1_start, trace2_start, pitch;
+    size_t inter_buffer_size;
     size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
     size_t total_length; // batch_size * trace_length
     size_t resampled_total_length;
     size_t out_size;
     int semaphore = 0;           // for selecting the current stream
     float scale = 500.f / 128.f; // for conversion into mV
-
-    /* Multitaper method properties */
-    int K; // number of tapers
-    std::vector<gpuvec> tapers;
-    gpuvec_c taperedData[num_streams];
-    gpuvec_c taperedNoise[num_streams];
-    cufftHandle resampled_plans[num_streams];
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
@@ -125,7 +118,7 @@ private:
     float a_qi, a_qq, c_i, c_q;
 
 public:
-    dsp(size_t len, uint64_t n, double part, int K_, double samplerate, int second_oversampling);
+    dsp(size_t len, uint64_t n, double part, double samplerate, int second_oversampling);
 
     ~dsp();
 
@@ -149,7 +142,7 @@ public:
 
     hostvec_c getCumulativeField();
 
-    hostvec_c getCumulativeSubtrData();
+    std::vector<hostvec_c> getCumulativeSubtrData();
 
     hostvec_c getCumulativeSubtrNoise();
   
@@ -163,24 +156,29 @@ public:
 
     void setDownConversionCalibrationParameters(float r, float phi, float offset_i, float offset_q);
 
-    void setSubtractionTrace(hostvec_c &trace, hostvec_c &offsets);
+    void setSubtractionTrace(hostvec_c trace[num_channels], hostvec_c offsets[num_channels]);
 
-    void getSubtractionTrace(hostvec_c &trace, hostvec_c &offsets);
+    void getSubtractionTrace(std::vector<hostvec_c> &trace, std::vector<hostvec_c> &offsets);
 
     void resetSubtractionTrace();
+
+    void createBuffer(size_t size);
+
+    void deleteBuffer();
+
+    void createInterBuffer(size_t size);
+
+    void deleteInterBuffer();
+
+    hostbuf getBuffer();
 
     void setIntermediateFrequency(float frequency, int oversampling);
 
     void setAmplitude(int ampl);
 
-    void setTapers(std::vector<stdvec> h_tapers);
-
-    std::vector<hostvec> getDPSSTapers();
-
     hostvec getPowerSpectrum();
     hostvec_c getDataSpectrum();
     hostvec_c getNoiseSpectrum();
-    hostvec getPeriodogram();
 
 protected:
     template <typename T>
@@ -194,7 +192,7 @@ protected:
                                          gpubuf &gpu_buf, size_t pitch, size_t offset, int stream_num);
 
     void divideDataFromDifferentChannels(const hostbuf buffer_ptr, 
-                                        thrust::host_vector<int8_t> &dst, size_t offset, int stream_num);
+                                        hostbuf &dst, size_t offset, int stream_num);
 
     void convertDataToMillivolts(gpuvec_c &data, const gpubuf &gpu_buf, const cudaStream_t &stream);
 
@@ -212,8 +210,6 @@ protected:
 
     void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
 
-    void resampleFFT(gpuvec_c &traces, gpuvec_c &resampled_traces, const int &stream_num);
-
     void normalize(gpuvec_c &data, float coeff, int stream_num);
 
     void calculatePower(const gpuvec_c &data, const gpuvec_c &noise, gpuvec &output, const cudaStream_t &stream);
@@ -221,11 +217,6 @@ protected:
     void calculateG1(gpuvec_c &data, gpuvec_c &noise, gpuvec_c &output, cublasHandle_t &handle);
 
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
-
-    void calculatePeriodogram(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, int stream_num);
-
-    void calculateMultitaperSpectrum(const gpuvec_c &data, const gpuvec_c &noise, gpuvec_c &signal_field_spectra,
-                                     gpuvec_c &noise_field_spectra, gpuvec &power_spectra, int stream_num);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH
