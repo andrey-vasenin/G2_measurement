@@ -20,7 +20,9 @@ Digitizer::Digitizer(const char *addr)
 {
     handle = spcm_hOpen(addr);
     if (!handle)
+    {
         throw std::runtime_error("Digitizer can not be imported");
+    }
     this->loadProperties();
 }
 
@@ -129,6 +131,12 @@ void Digitizer::setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int se
     this->handleError();
 }
 
+void::Digitizer::setupSingleRecFifoMode(int32 pretrigger)
+{
+    spcm_dwSetParam_i32(handle, SPC_CARDMODE, SPC_REC_FIFO_SINGLE);
+    spcm_dwSetParam_i32(handle, SPC_PRETRIGGER, pretrigger);
+}
+
 // Sets the digitizer to trigger on a positive edge at EXT0 port
 void Digitizer::setExt0TriggerOnPositiveEdge(int32 voltageThreshold)
 {
@@ -136,6 +144,11 @@ void Digitizer::setExt0TriggerOnPositiveEdge(int32 voltageThreshold)
     spcm_dwSetParam_i32(handle, SPC_TRIG_EXT0_MODE, SPC_TM_POS);
     spcm_dwSetParam_i32(handle, SPC_TRIG_EXT0_LEVEL0, voltageThreshold);
     this->handleError();
+}
+
+void Digitizer::autoTrigger()
+{
+    spcm_dwSetParam_i32(handle, SPC_TRIG_ORMASK, SPC_TMASK_SOFTWARE);
 }
 
 void Digitizer::setBuffer(int8_t *buf, size_t bufsize)
@@ -235,8 +248,11 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
 #endif // _DEBUG
             continue;
         }
-        if (computing)
-            processor(&buffer[shift]);
+        if (computing) 
+        {
+            auto buff_ptr = &buffer[shift];
+            processor(buff_ptr);
+        }
         spcm_dwSetParam_i32(handle, SPC_DATA_AVAIL_CARD_LEN, notifysize);
         this->handleError();
         i++;

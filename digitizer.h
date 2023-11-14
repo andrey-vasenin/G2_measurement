@@ -10,7 +10,7 @@
 #include <ostream>
 #include "dlltyp.h"
 #include "regs.h"
-#include "dsp.cuh"
+// #include "dsp.cuh"
 
 typedef std::function<void(int8_t *)> proc_t;
 
@@ -68,8 +68,12 @@ public:
 
     void setExt0TriggerOnPositiveEdge(int32 voltageThreshold);
 
+    void autoTrigger();
+
     /* Mode setters */
     void setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int segments);
+
+    void setupSingleRecFifoMode(int32 pretrigger);
 
     /* Measurers */
     void prepareFifo(uint32 notifysize);
