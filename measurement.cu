@@ -15,17 +15,14 @@
 #include "digitizer.h"
 #include "measurement.cuh"
 #include "tiled_range.cuh"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include "yokogawa_gs210.h"
 #include <thrust/zip_function.h>
 #include <future>
 #include <thread>
 
-namespace py = pybind11;
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, int K, const char *coil_address)
+                         int second_oversampling, const char *coil_address)
 {
     dig = dig_;
     sampling_rate = static_cast<double>(dig->getSamplingRate());
@@ -33,10 +30,10 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     segment_size = dig->getSegmentSize();
     batch_size = batch;
     setAveragesNumber(averages);
-    notify_size = 2 * segment_size * batch_size;
+    notify_size = 2 * num_channels * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000); // ms
-    processor = new dsp(segment_size, batch_size, part, K, sampling_rate, second_oversampling);
+    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -48,9 +45,9 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, int K, const char *coil_address)
+                         int second_oversampling, const char *coil_address)
     : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
-                  second_oversampling, K, coil_address)
+                  second_oversampling, coil_address)
 {
 }
 
@@ -83,8 +80,10 @@ void Measurement::initializeBuffer()
 {
     // Create the buffer in page-locked memory
     size_t buffersize = 4 * notify_size;
-    buffer.resize(buffersize, 0);
-    dig->setBuffer(buffer.data(), buffersize);
+    processor->createBuffer(buffersize);
+    // size_t interbuffersize = processor->getInterBufferSize();
+    processor->createInterBuffer(buffersize / num_channels);
+    dig->setBuffer(processor->getBuffer(), buffersize);
 }
 
 void Measurement::setCurrents(float wc, float oc)
@@ -111,11 +110,6 @@ void Measurement::setAveragesNumber(uint64_t averages)
     segments_count = averages;
     iters_num = averages / batch_size;
     iters_done = 0;
-}
-
-void Measurement::setTapers(std::vector<stdvec> tapers)
-{
-    processor->setTapers(tapers);
 }
 
 void Measurement::setCalibration(float r, float phi, float offset_i, float offset_q)
@@ -218,12 +212,7 @@ stdvec_c Measurement::getNoiseSpectrum()
     return postprocess<tcf, std::complex<float>>(processor->getNoiseSpectrum());
 }
 
-stdvec Measurement::getPeriodogram()
-{
-    return postprocess<float, float>(processor->getPeriodogram());
-}
-
-std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(string request)
+std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(std::string request)
 {
     int len = processor->getOutSize();
     int side = processor->getTraceLength();
@@ -234,31 +223,21 @@ std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(string
 
     // Receive data from GPU
     if (request == "g1")
-    {
         processor->getG1results(result);
-    }
-    elif (request == "g2_full")
-    {
+    else if (request == "g2_full")
         processor->getG2FullResults(result);
-    }
-    elif (request == "g2_filteted")
-    {
+    else if (request == "g2_filtered")
         processor->getG2FilteredResults(result);
-    }
     else
-    {
-        std::cerr << "Request is not correct";
-        return 1;
-    }
+        throw std::runtime_error("Request is not correct");
     
     // Divide the data by a number of traces measured
-    int k = 0;
     tcf X((iters_done > 0) ? static_cast<float>(iters_done * batch_size) : 1.f, 0.f);
   
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = t1; t2 < side; t2++)
         {
-            average_result[t1][t2] = std::complex<float>(corr[t1 * side + t2]);
+            average_result[t1][t2] = std::complex<float>(result[t1 * side + t2]);
             average_result[t2][t1] = std::conj(average_result[t1][t2]);
         }
         
@@ -291,44 +270,54 @@ stdvec_c Measurement::getRawG2()
     return stdvec_c(result.begin(), result.end());
 }
 
-void Measurement::setSubtractionTrace(stdvec_c trace, stdvec_c offsets)
+void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace, std::vector<stdvec_c> offsets)
 {
-    hostvec_c average = tile(trace, batch_size);
-    hostvec_c average_offsets = tile(offsets, batch_size);
+    hostvec_c average[num_channels];
+    hostvec_c average_offsets[num_channels];
+    for (int i = 0; i < num_channels; i++)
+    {
+        average[i] = tile(trace[i], batch_size);
+        average_offsets[i] = tile(offsets[i], batch_size);
+    }
     processor->setSubtractionTrace(average, average_offsets);
 }
 
-stdvec_c Measurement::getSubtractionData()
+std::vector<stdvec_c> Measurement::getSubtractionData()
 {
-    return postprocess<tcf, std::complex<float>>(processor->getCumulativeSubtrData());
+    std::vector<stdvec_c> subtr_data;
+    auto vec = processor->getCumulativeSubtrData();
+    for (int i = 0; i < num_channels; i++)
+    {
+        subtr_data.push_back(postprocess<tcf, std::complex<float>>(vec[i]));
+    }
+    
+    return subtr_data;
 }
 
-stdvec_c Measurement::getSubtractionNoise()
+std::vector<stdvec_c> Measurement::getSubtractionNoise()
 {
-    return postprocess<tcf, std::complex<float>>(processor->getCumulativeSubtrNoise());
+    std::vector<stdvec_c> subtr_noise;
+    auto vec = processor->getCumulativeSubtrData();
+    for (int i = 0; i < num_channels; i++)
+    {
+        subtr_noise.push_back(postprocess<tcf, std::complex<float>>(vec[i]));
+    }
+    
+    return subtr_noise;
 }
 
-py::tuple Measurement::getSubtractionTrace()
+std::tuple<std::vector<hostvec_c>, std::vector<hostvec_c>> Measurement::getSubtractionTrace()
 {
     auto len = processor->getTotalLength();
-    hostvec_c subtraction_trace(len);
-    hostvec_c subtraction_offs(len);
+    std::vector<hostvec_c> subtraction_trace;
+    std::vector<hostvec_c> subtraction_offs;
+    for (int i = 0; i < num_channels; i++)
+    {
+        subtraction_trace[i].resize(len);
+        subtraction_offs[i].resize(len);
+    }
     processor->getSubtractionTrace(subtraction_trace, subtraction_offs);
-    return py::make_tuple(stdvec_c(subtraction_trace.begin(), subtraction_trace.end()),
-                          stdvec_c(subtraction_offs.begin(), subtraction_offs.end()));
-}
-
-std::vector<std::vector<float>> Measurement::getDPSSTapers()
-{
-    auto tapers = processor->getDPSSTapers();
-    std::vector<std::vector<float>> result(tapers.size());
-    thrust::for_each(thrust::make_zip_iterator(tapers.cbegin(), result.begin()),
-                     thrust::make_zip_iterator(tapers.cend(), result.end()),
-                     thrust::make_zip_function([](const auto &src, auto &dst)
-                                               {
-        dst.resize(src.size());
-        std::copy(src.cbegin(), src.cend(), dst.begin()); }));
-    return result;
+    return std::make_tuple(subtraction_trace, subtraction_offs);
 }
 
 template <typename T, typename V>

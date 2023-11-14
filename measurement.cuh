@@ -6,15 +6,15 @@
 
 #include <vector>
 #include <memory>
+#include <string>
 #include <cstdint>
 #include "digitizer.h"
 #include "dsp.cuh"
 #include "pinned_allocator.cuh"
-#include <pybind11/pybind11.h>
+// #include <pybind11/pybind11.h>
 #include "yokogawa_gs210.h"
 
-namespace py = pybind11;
-typedef std::vector<int8_t, PinnedAllocator<int8_t>> hostbuf;
+// namespace py = pybind11;
 
 class Measurement
 {
@@ -43,11 +43,11 @@ private:
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, int K, const char *coil_address);
+                int second_oversampling, const char *coil_address);
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, int K, const char *coil_address);
-
+                int second_oversampling, const char *coil_address);
+                
     void setAmplitude(int ampl);
 
     void setCurrents(float wc, float oc);
@@ -67,8 +67,6 @@ public:
     void setFirwin(float left_cutoff, float right_cutoff);
 
     void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2]);
-
-    void setTapers(std::vector<stdvec> tapers);
 
     void setIntermediateFrequency(float frequency);
 
@@ -91,22 +89,20 @@ public:
     stdvec_c getDataSpectrum();
 
     stdvec_c getNoiseSpectrum();
-
-    stdvec getPeriodogram();
   
-    std::vector<std::vector<std::complex<double>>> getCorrelator(string request);
+    std::vector<std::vector<std::complex<double>>> getCorrelator(std::string request);
 
-    stdvec_c getSubtractionData();
+    std::vector<stdvec_c> getSubtractionData();
 
-    stdvec_c getSubtractionNoise();
+    std::vector<stdvec_c> getSubtractionNoise();
 
     stdvec_c getRawG1();
 
     stdvec_c getRawG2();
 
-    void setSubtractionTrace(stdvec_c trace, stdvec_c offsets);
+    void setSubtractionTrace(std::vector<stdvec_c> trace, std::vector<stdvec_c> offsets);
 
-    py::tuple getSubtractionTrace();
+    std::tuple<std::vector<hostvec_c>, std::vector<hostvec_c>> getSubtractionTrace();
 
     int getTotalLength() { return processor->getTotalLength(); }
 
@@ -115,8 +111,6 @@ public:
     int getOutSize() { return processor->getOutSize(); }
 
     size_t getNotifySize() { return notify_size; }
-
-    std::vector<std::vector<float>> getDPSSTapers();
 
 protected:
     void initializeBuffer();
