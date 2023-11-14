@@ -8,18 +8,17 @@
 #include <pybind11/iostream.h>
 #include "measurement.cuh"
 
+namespace py = pybind11;
 using output_and_gil_guard = py::call_guard<py::scoped_ostream_redirect,
                                             py::scoped_estream_redirect,
                                             py::gil_scoped_release>;
 
 using namespace pybind11::literals;
 
-namespace py = pybind11;
-
-PYBIND11_MODULE(multitaper_measurement, m)
+PYBIND11_MODULE(g2_measurement, m)
 {
-    py::class_<Measurement>(m, "PsdMeasurer", py::module_local())
-        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, int, const char *>(), output_and_gil_guard())
+    py::class_<Measurement>(m, "G2Measurer", py::module_local())
+        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, const char *>(), output_and_gil_guard())
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
         .def("set_correlation_firwin", &Measurement::setCorrelationFirwin, output_and_gil_guard())
@@ -31,7 +30,6 @@ PYBIND11_MODULE(multitaper_measurement, m)
         .def("get_psd", &Measurement::getPSD, output_and_gil_guard())
         .def("get_data_spectrum", &Measurement::getDataSpectrum, output_and_gil_guard())
         .def("get_noise_spectrum", &Measurement::getNoiseSpectrum, output_and_gil_guard())
-        .def("get_periodogram", &Measurement::getPeriodogram, output_and_gil_guard())
         .def("get_raw_g1", &Measurement::getRawG1, output_and_gil_guard())
         .def("get_raw_g2", &Measurement::getRawG2, output_and_gil_guard())
         .def("reset", &Measurement::reset, output_and_gil_guard())
@@ -50,7 +48,5 @@ PYBIND11_MODULE(multitaper_measurement, m)
         .def("get_total_length", &Measurement::getTotalLength, output_and_gil_guard())
         .def("get_trace_length", &Measurement::getTraceLength, output_and_gil_guard())
         .def("get_out_size", &Measurement::getOutSize, output_and_gil_guard())
-        .def("get_notify_size", &Measurement::getNotifySize, output_and_gil_guard())
-        .def("set_dpss_tapers", &Measurement::setTapers, output_and_gil_guard())
-        .def("get_dpss_tapers", &Measurement::getDPSSTapers, output_and_gil_guard());
+        .def("get_notify_size", &Measurement::getNotifySize, output_and_gil_guard());
 }
