@@ -43,7 +43,6 @@ int main()
 
     double part = 0.40764331210191085;
     int second_oversampling = 4;
-    // std::unique_ptr<Measurement> mes;
     try {
         auto dig = new Digitizer("/dev/spcm1");
         if (dig) { // Check if dig is not null
@@ -72,9 +71,13 @@ int main()
         auto t2 = high_resolution_clock::now();
         auto dur = duration_cast<seconds>(t2 - t1);
         std::cout << "Measurement duration: " << dur.count() << "s\n";
-        auto field = mes->getMeanField();
-        std::cout << field[0] << std::endl;
-        std::cout << "all right" << std::endl;
+        auto sd = mes->getSubtractionData();
+        mes->setSubtractionTrace(sd);
+        auto st = mes->getSubtractionTrace();
+        tcf a = st[0][0];
+        tcf b = sd[0][0];
+        std::cout << a - b << std::endl;
+
     }
     catch (const std::runtime_error& e) {
         // Handle the exception
@@ -90,7 +93,7 @@ int main()
         std::cout << "Caught an unknown exception\n";
         return 1;
     }
-
+    std::cout << "all right" << std::endl;
  
     
     
@@ -106,7 +109,7 @@ int main()
     //  strided_range<gpubuf::iterator> channelQ(vec.begin() + 1, vec.end(), 2);
     //  thrust::transform(thrust::device.on(s1), channelI.begin(), channelI.end(), channelQ.begin(), data.begin(), func);
     //  std::cout << data[0] << std::endl;*/
-
+    
 
     return 0;
 }

@@ -11,7 +11,6 @@
 #include "digitizer.h"
 #include "dsp.cuh"
 #include "pinned_allocator.cuh"
-// #include <pybind11/pybind11.h>
 #include "yokogawa_gs210.h"
 
 // namespace py = pybind11;
@@ -79,30 +78,16 @@ public:
     void measureTest();
 
     void setTestInput(const std::vector<int8_t> &input);
-
-    stdvec_c getMeanField();
-
-    stdvec getMeanPower();
-
-    stdvec getPSD();
-
-    stdvec_c getDataSpectrum();
-
-    stdvec_c getNoiseSpectrum();
   
     std::vector<std::vector<std::complex<double>>> getCorrelator(std::string request);
 
     std::vector<stdvec_c> getSubtractionData();
 
-    std::vector<stdvec_c> getSubtractionNoise();
-
-    stdvec_c getRawG1();
-
     stdvec_c getRawG2();
 
-    void setSubtractionTrace(std::vector<stdvec_c> trace, std::vector<stdvec_c> offsets);
+    void setSubtractionTrace(std::vector<stdvec_c> trace);
 
-    std::tuple<std::vector<hostvec_c>, std::vector<hostvec_c>> getSubtractionTrace();
+    std::vector<hostvec_c> getSubtractionTrace();
 
     int getTotalLength() { return processor->getTotalLength(); }
 

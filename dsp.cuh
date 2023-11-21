@@ -19,7 +19,7 @@
 const int num_streams = 4;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
-const int num_channels = 1; // number of used digitizer channels
+const int num_channels = 2; // number of used digitizer channels
 
 typedef thrust::complex<float> tcf;
 typedef thrust::device_vector<float> gpuvec;
@@ -57,32 +57,23 @@ class dsp
 
     /* Pointers to arrays with data */
     gpubuf gpu_data_buf[num_streams];  // buffers for loading data
-    gpubuf gpu_noise_buf[num_streams]; // buffers for loading data
-    gpuvec_c data[num_channels][num_streams];
-    gpuvec_c data_resampled[num_channels][num_streams];
-    gpuvec_c data_fft[num_streams];
-    gpuvec_c subtraction_data[num_channels][num_streams];
-    gpuvec_c data_for_correlation[2][num_streams];
+    gpuvec_c data1[num_streams];
+    gpuvec_c data2[num_streams];
+    gpuvec_c subtraction_data1[num_streams];
+    gpuvec_c subtraction_data2[num_streams];
+    gpuvec_c data_for_correlation1[num_streams];
+    gpuvec_c data_for_correlation2[num_streams];
 
-    gpuvec_c noise[num_channels][num_streams];
-    gpuvec_c noise_resampled[num_channels][num_streams];
-    gpuvec_c noise_fft[num_streams];
-    gpuvec_c subtraction_noise[num_channels][num_streams];
-
-    gpuvec power[num_streams];   // arrays for storage of average power
-    gpuvec_c field[num_streams]; // arrays for storage of average field
-    gpuvec_c g1_out[num_streams];
     gpuvec_c g2_out[num_streams];
     gpuvec_c g2_out_filtered[num_streams];
-    gpuvec spectrum[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
     gpuvec_c corr_firwin[2];
 
     /* Subtraction traces */
-    gpuvec_c subtraction_trace[num_channels];
-    gpuvec_c subtraction_offs[num_channels];
+    gpuvec_c subtraction_trace1;
+    gpuvec_c subtraction_trace2;
 
     /* Downconversion coefficients */
     gpuvec_c downconversion_coeffs;
@@ -138,17 +129,9 @@ public:
 
     void compute(const hostbuf buffer_ptr);
 
-    hostvec getCumulativePower();
-
-    hostvec_c getCumulativeField();
-
     std::vector<hostvec_c> getCumulativeSubtrData();
-
-    hostvec_c getCumulativeSubtrNoise();
   
     gpuvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
-
-    void getG1results(hostvec_c &result);
 
     void getG2FullResults(hostvec_c &result);
 
@@ -156,9 +139,9 @@ public:
 
     void setDownConversionCalibrationParameters(float r, float phi, float offset_i, float offset_q);
 
-    void setSubtractionTrace(hostvec_c trace[num_channels], hostvec_c offsets[num_channels]);
+    void setSubtractionTrace(hostvec_c trace[num_channels]);
 
-    void getSubtractionTrace(std::vector<hostvec_c> &trace, std::vector<hostvec_c> &offsets);
+    void getSubtractionTrace(std::vector<hostvec_c> &trace);
 
     void resetSubtractionTrace();
 
@@ -176,10 +159,6 @@ public:
 
     void setAmplitude(int ampl);
 
-    hostvec getPowerSpectrum();
-    hostvec_c getDataSpectrum();
-    hostvec_c getNoiseSpectrum();
-
 protected:
     template <typename T>
     thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces);
@@ -188,11 +167,8 @@ protected:
 
     void switchStream() { semaphore = (semaphore < (num_streams - 1)) ? semaphore + 1 : 0; };
 
-    void loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
-                                         gpubuf &gpu_buf, size_t pitch, size_t offset, int stream_num);
-
     void divideDataFromDifferentChannels(const hostbuf buffer_ptr, 
-                                        hostbuf &dst, size_t offset, int stream_num);
+                                        gpubuf &dst, size_t offset, int stream_num);
 
     void convertDataToMillivolts(gpuvec_c &data, const gpubuf &gpu_buf, const cudaStream_t &stream);
 
@@ -206,15 +182,9 @@ protected:
 
     void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num);
 
-    void calculateField(const gpuvec_c &data, const gpuvec_c &noise, gpuvec_c &output, const cudaStream_t &stream);
-
     void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
 
     void normalize(gpuvec_c &data, float coeff, int stream_num);
-
-    void calculatePower(const gpuvec_c &data, const gpuvec_c &noise, gpuvec &output, const cudaStream_t &stream);
-
-    void calculateG1(gpuvec_c &data, gpuvec_c &noise, gpuvec_c &output, cublasHandle_t &handle);
 
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 };

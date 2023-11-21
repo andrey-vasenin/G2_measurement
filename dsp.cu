@@ -90,13 +90,11 @@ dsp::dsp(size_t len, uint64_t n, double part,
 {
     downconversion_coeffs.resize(total_length, tcf(0.f));
     firwin.resize(total_length, tcf(0.f)); // GPU memory for the filtering window
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtraction_offs[i].resize(total_length, tcf(0.f));
-        subtraction_trace[i].resize(total_length, tcf(0.f));
-        corr_firwin[i].resize(total_length, tcf(0.f));
-    }
-
+    subtraction_trace1.resize(total_length, tcf(0.f));
+    subtraction_trace2.resize(total_length, tcf(0.f));
+    corr_firwin[0].resize(total_length, tcf(0.f));
+    corr_firwin[1].resize(total_length, tcf(0.f));
+    
     // Streams
     for (int i = 0; i < num_streams; i++)
     {
@@ -105,31 +103,19 @@ dsp::dsp(size_t len, uint64_t n, double part,
         check_npp_error(nppGetStreamContext(&streamContexts[i]), "Npp Error GetStreamContext");
         streamContexts[i].hStream = streams[i];
 
-        // subtraction_trace[j].resize(total_length, tcf(0.f));
-        // subtraction_offs[j].resize(total_length, tcf(0.f));
-
         // Allocate arrays on GPU for every stream
         gpu_data_buf[i].resize(2 * total_length, '\0');
-        gpu_noise_buf[i].resize(2 * total_length, '\0');
-        power[i].resize(total_length, 0.f);
-        field[i].resize(total_length, tcf(0.f));
-        data_fft[i].resize(resampled_total_length, tcf(0.f));
-        noise_fft[i].resize(resampled_total_length, tcf(0.f));
-        spectrum[i].resize(resampled_total_length, 0.f);
 
         // Allocate arrays on GPU for every channel of digitizer
-        for (int j = 0; j < num_channels; j++)
-        {
-            data[j][i].resize(total_length, tcf(0.f));
-            data_resampled[j][i].resize(resampled_total_length, tcf(0.f));
-            subtraction_data[j][i].resize(total_length, tcf(0.f));
-            noise[j][i].resize(total_length, tcf(0.f));
-            noise_resampled[j][i].resize(resampled_total_length, tcf(0.f));
-            subtraction_noise[j][i].resize(total_length, tcf(0.f));
-            data_for_correlation[j][i].resize(total_length, tcf(0.f));
-        }
-        data[0][i].resize(total_length, tcf(0.f));
-        g1_out[i].resize(out_size, tcf(0.f));
+        data1[i].resize(total_length, tcf(0.f));
+        data2[i].resize(total_length, tcf(0.f));
+
+        subtraction_data1[i].resize(total_length, tcf(0.f));
+        subtraction_data2[i].resize(total_length, tcf(0.f));
+
+        data_for_correlation1[i].resize(total_length, tcf(0.f));
+        data_for_correlation2[i].resize(total_length, tcf(0.f));
+
         g2_out[i].resize(out_size, tcf(0.f));
         g2_out_filtered[i].resize(out_size), tcf(0.f);
         
@@ -277,27 +263,17 @@ void dsp::applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream)
     auto sync_exec_policy = thrust::cuda::par_nosync.on(stream);
     thrust::for_each(sync_exec_policy, data.begin(), data.end(), calibration_functor(a_qi, a_qq, c_i, c_q));
 }
-// Fills with zeros the arrays for cumulative field and power in the GPU memory
+// Fills with zeros the arrays for results output in the GPU memory
 void dsp::resetOutput()
 {
     for (int i = 0; i < num_streams; i++)
     {
-        // thrust::fill(out[i].begin(), out[i].end(), tcf(0));
-        thrust::fill(field[i].begin(), field[i].end(), tcf(0));
-        thrust::fill(power[i].begin(), power[i].end(), 0.f);
-        thrust::fill(spectrum[i].begin(), spectrum[i].end(), 0.f);
-        thrust::fill(data_fft[i].begin(), data_fft[i].end(), tcf(0));
-        thrust::fill(noise_fft[i].begin(), noise_fft[i].end(), tcf(0));
-        for (int j = 0; j < num_channels; j++)
-        {
-            thrust::fill(subtraction_data[j][i].begin(), subtraction_data[j][i].end(), tcf(0));
-            thrust::fill(subtraction_noise[j][i].begin(), subtraction_noise[j][i].end(), tcf(0));
-        }
-        thrust::fill(g1_out[i].begin(), g1_out[i].end(), tcf(0));
+        thrust::fill(subtraction_data1[i].begin(), subtraction_data1[i].end(), tcf(0));
+        thrust::fill(subtraction_data2[i].begin(), subtraction_data2[i].end(), tcf(0));
         thrust::fill(g2_out[i].begin(), g2_out[i].end(), tcf(0));
         thrust::fill(g2_out_filtered[i].begin(), g2_out[i].end(), tcf(0));
-        thrust::fill(data_for_correlation[0][i].begin(), data_for_correlation[0][i].begin(), tcf(0));
-        thrust::fill(data_for_correlation[1][i].begin(), data_for_correlation[0][i].begin(), tcf(0));
+        thrust::fill(data_for_correlation1[i].begin(), data_for_correlation1[i].begin(), tcf(0));
+        thrust::fill(data_for_correlation2[i].begin(), data_for_correlation2[i].begin(), tcf(0));
     }
 }
 
@@ -305,72 +281,46 @@ void dsp::compute(const hostbuf buffer_ptr)
 {
     const int stream_num = semaphore;
     switchStream();
-    for (int i = 0; i < num_channels; i++)
-    {
-        divideDataFromDifferentChannels(buffer_ptr, inter_buffer, i, stream_num);
-        loadDataToGPUwithPitchAndOffset(inter_buffer, gpu_data_buf[stream_num], pitch, trace1_start, stream_num);
-        loadDataToGPUwithPitchAndOffset(inter_buffer, gpu_noise_buf[stream_num], pitch, trace2_start, stream_num);
+    divideDataFromDifferentChannels(buffer_ptr, gpu_data_buf[stream_num], 0, stream_num);
+    convertDataToMillivolts(data1[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
+    applyDownConversionCalibration(data1[stream_num], streams[stream_num]);
+    applyFilter(data1[stream_num], firwin, stream_num);
+    downconvert(data1[stream_num], stream_num);
+    subtractDataFromOutput(subtraction_trace1, data1[stream_num], stream_num);
+    addDataToOutput(data1[stream_num], subtraction_data1[stream_num], stream_num);
 
-        convertDataToMillivolts(data[i][stream_num], gpu_data_buf[stream_num], streams[stream_num]);
-        convertDataToMillivolts(noise[i][stream_num], gpu_noise_buf[stream_num], streams[stream_num]);
-
-        applyDownConversionCalibration(data[i][stream_num], streams[stream_num]);
-        applyDownConversionCalibration(noise[i][stream_num], streams[stream_num]);
-
-        applyFilter(data[i][stream_num], firwin, stream_num);
-        applyFilter(noise[i][stream_num], firwin, stream_num);
-
-        downconvert(data[i][stream_num], stream_num);
-        downconvert(noise[i][stream_num], stream_num);
-
-        subtractDataFromOutput(subtraction_trace[i], data[i][stream_num], stream_num);
-        subtractDataFromOutput(subtraction_offs[i], noise[i][stream_num], stream_num);
-
-        addDataToOutput(data[i][stream_num], subtraction_data[i][stream_num], stream_num);
-        addDataToOutput(noise[i][stream_num], subtraction_noise[i][stream_num], stream_num);
-    }
-    calculateField(data[0][stream_num], noise[0][stream_num],
-                   field[stream_num], streams[stream_num]);
-    calculatePower(data[0][stream_num], noise[0][stream_num], power[stream_num], streams[stream_num]);
-    calculateG1(data[0][stream_num], noise[0][stream_num],
-                g1_out[stream_num], cublas_handles[stream_num]);
+    divideDataFromDifferentChannels(buffer_ptr, gpu_data_buf[stream_num], 1, stream_num);
+    convertDataToMillivolts(data2[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
+    applyDownConversionCalibration(data2[stream_num], streams[stream_num]);
+    applyFilter(data2[stream_num], firwin, stream_num);
+    downconvert(data2[stream_num], stream_num);
+    subtractDataFromOutput(subtraction_trace2, data2[stream_num], stream_num);
+    addDataToOutput(data2[stream_num], subtraction_data2[stream_num], stream_num);
 
     // Example of calculateG2 usage
-    for (int i = 0; i < 2; i++)
-    {
-        data_for_correlation[i][stream_num] = data[0][stream_num];
-        applyFilter(data_for_correlation[i][stream_num], corr_firwin[i], stream_num);
-    }
-    calculateG2(data_for_correlation[0][stream_num], data_for_correlation[1][stream_num], g2_out_filtered[stream_num],
+    data_for_correlation1[stream_num] = data1[stream_num];
+    applyFilter(data_for_correlation1[stream_num], corr_firwin[0], stream_num);
+    data_for_correlation2[stream_num] = data2[stream_num];
+    applyFilter(data_for_correlation2[stream_num], corr_firwin[1], stream_num);
+
+    calculateG2(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g2_out_filtered[stream_num],
                 streams[stream_num], cublas_handles[stream_num]);
-    calculateG2(data[0][stream_num], data[1][stream_num], g2_out[stream_num],
+    calculateG2(data1[stream_num], data2[stream_num], g2_out[stream_num],
                 streams[stream_num], cublas_handles[stream_num]);
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
-void dsp::loadDataToGPUwithPitchAndOffset(const hostbuf buffer_ptr,
-                                          gpubuf &gpu_buf, size_t pitch, size_t offset, int stream_num)
-{
-    size_t width = 2 * num_channels * size_t(trace_length) * sizeof(int8_t);
-    size_t src_pitch = 2 * num_channels * pitch * sizeof(int8_t);
-    size_t dst_pitch = width;
-    size_t shift = 2 * num_channels * offset;
-    handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(gpu_buf.data()), dst_pitch,
-                                  static_cast<const void *>(buffer_ptr + shift), src_pitch, width, batch_size,
-                                  cudaMemcpyHostToDevice, streams[stream_num]));
-}
-
 void dsp::divideDataFromDifferentChannels(const hostbuf buffer_ptr,
-                                          hostbuf &dst, size_t offset, int stream_num)
+                                          gpubuf &dst, size_t offset, int stream_num)
 {
     size_t width = 2 * sizeof(int8_t);
     size_t src_pitch = 2 * num_channels * sizeof(int8_t);
     size_t dst_pitch = width;
     size_t shift = 2 * num_channels * offset;
     size_t height = batch_size * trace_length;
-    handleError(cudaMemcpy2DAsync(static_cast<void *>(dst), dst_pitch,
+    handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
                                   static_cast<const void *>(buffer_ptr + shift), src_pitch, width, height,
-                                  cudaMemcpyHostToHost, streams[stream_num]));
+                                  cudaMemcpyHostToDevice, streams[stream_num]));
 }
 
 // Converts bytes into 32-bit floats with mV dimensionality
@@ -422,15 +372,6 @@ void dsp::subtractDataFromOutput(const gpuvec_c &data, gpuvec_c &output, int str
         output.begin(), thrust::minus<tcf>());*/
 }
 
-// Calculates the field from the data in the GPU memory
-void dsp::calculateField(const gpuvec_c &data, const gpuvec_c &noise, gpuvec_c &output, const cudaStream_t &stream)
-{
-    thrust::for_each(thrust::cuda::par_nosync.on(stream),
-                     thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
-                     thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
-                     thrust::make_zip_function(field_functor()));
-}
-
 void dsp::resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream)
 {
     using iter = gpuvec_c::const_iterator;
@@ -471,41 +412,6 @@ void dsp::normalize(gpuvec_c &data, float coeff, int stream_num)
     Npp32fc x{coeff, 0.f};
     nppsMulC_32fc_I_Ctx(x, reinterpret_cast<Npp32fc *>(thrust::raw_pointer_cast(data.data())),
                         data.size(), streamContexts[stream_num]);
-}
-
-// Calculates the power from the data in the GPU memory
-void dsp::calculatePower(const gpuvec_c &data, const gpuvec_c &noise, gpuvec &output, const cudaStream_t &stream)
-{
-    thrust::for_each(thrust::cuda::par_nosync.on(stream),
-                     thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
-                     thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
-                     thrust::make_zip_function(power_functor()));
-}
-
-// Calculates first-order correlation function for signal with noise subtraction
-void dsp::calculateG1(gpuvec_c &data, gpuvec_c &noise, gpuvec_c &output, cublasHandle_t &handle)
-{
-    using namespace std::string_literals;
-
-    const float alpha_data = 1;   // this alpha multiplies the result to be added to the output
-    const float alpha_noise = -1; // this alpha multiplies the result to be added to the output
-    const float beta = 1;
-    // Compute correlation for the signal and add it to the output
-    auto cublas_status = cublasCherk(handle,
-                                     CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, trace_length, batch_size,
-                                     &alpha_data, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data.data())), trace_length,
-                                     &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), trace_length);
-    // Check for errors
-    check_cublas_error(cublas_status,
-                       "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
-    // Compute correlation for the noise and subtract it from the output
-    cublas_status = cublasCherk(handle,
-                                CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, trace_length, batch_size,
-                                &alpha_noise, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(noise.data())), trace_length,
-                                &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), trace_length);
-    // Check for errors
-    check_cublas_error(cublas_status,
-                       "Error of rank-1 update (noise) with code #"s + std::to_string(cublas_status));
 }
 
 // Calculate second-order correlation function.
@@ -559,11 +465,6 @@ gpuvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
     return c;
 }
 
-void dsp::getG1results(hostvec_c &result)
-{
-    result = getCumulativeCorrelator(g1_out);
-}
-
 void dsp::getG2FullResults(hostvec_c &result)
 {
     result = getCumulativeCorrelator(g2_out);
@@ -574,46 +475,12 @@ void dsp::getG2FilteredResults(hostvec_c &result)
     result = getCumulativeCorrelator(g2_out_filtered);
 }
 
-// Returns the cumulative power
-hostvec dsp::getCumulativePower()
-{
-    return getCumulativeTrace(power);
-}
-
-hostvec dsp::getPowerSpectrum()
-{
-    return getCumulativeTrace(spectrum);
-}
-
-hostvec_c dsp::getDataSpectrum()
-{
-    return getCumulativeTrace(data_fft);
-}
-
-hostvec_c dsp::getNoiseSpectrum()
-{
-    return getCumulativeTrace(noise_fft);
-}
-
-// Returns the cumulative field
-hostvec_c dsp::getCumulativeField()
-{
-    return getCumulativeTrace(field);
-}
-
 std::vector<hostvec_c> dsp::getCumulativeSubtrData()
 {
     std::vector<hostvec_c> subtr_data;
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtr_data.push_back(getCumulativeTrace(subtraction_data[i]));
-    }
+    subtr_data.push_back(getCumulativeTrace(subtraction_data1));
+    subtr_data.push_back(getCumulativeTrace(subtraction_data2));
     return subtr_data;
-}
-
-hostvec_c dsp::getCumulativeSubtrNoise()
-{
-    return getCumulativeTrace(subtraction_noise[0]);
 }
 
 // Returns the useful length of the data in a segment
@@ -640,29 +507,20 @@ void dsp::setAmplitude(int ampl)
     scale = static_cast<float>(ampl) / 128.f;
 }
 
-void dsp::setSubtractionTrace(hostvec_c trace[num_channels], hostvec_c offsets[num_channels])
+void dsp::setSubtractionTrace(hostvec_c trace[num_channels])
 {
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtraction_trace[i] = trace[i];
-        subtraction_offs[i] = offsets[i];
-    }
+    subtraction_trace1 = trace[0];
+    subtraction_trace2 = trace[1];
 }
 
-void dsp::getSubtractionTrace(std::vector<hostvec_c> &trace, std::vector<hostvec_c> &offsets)
+void dsp::getSubtractionTrace(std::vector<hostvec_c> &trace)
 {
-    for (int i = 0; i < num_channels; i++)
-    {
-        trace[i] = subtraction_trace[i];
-        offsets[i] = subtraction_offs[i];
-    }
+    trace.push_back(subtraction_trace1);
+    trace.push_back(subtraction_trace2);
 }
 
 void dsp::resetSubtractionTrace()
 {
-    for (int i = 0; i < num_channels; i++)
-    {
-        thrust::fill(subtraction_trace[i].begin(), subtraction_trace[i].end(), tcf(0));
-        thrust::fill(subtraction_offs[i].begin(), subtraction_offs[i].end(), tcf(0));
-    }
+    thrust::fill(subtraction_trace1.begin(), subtraction_trace1.end(), tcf(0));
+    thrust::fill(subtraction_trace2.begin(), subtraction_trace2.end(), tcf(0));
 }

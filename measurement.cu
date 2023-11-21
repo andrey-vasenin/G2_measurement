@@ -142,7 +142,7 @@ void Measurement::measure()
 void Measurement::asyncCurrentSwitch()
 {
     coil->set_current(working_current);
-    setSubtractionTrace(getSubtractionData(), getSubtractionNoise());
+    setSubtractionTrace(getSubtractionData());
     resetOutput();
     cudaDeviceSynchronize();
 }
@@ -187,30 +187,6 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
     test_input = tile(input, batch_size);
 }
 
-stdvec_c Measurement::getMeanField()
-{
-    return postprocess<tcf, std::complex<float>>(processor->getCumulativeField());
-}
-
-stdvec Measurement::getMeanPower()
-{
-    return postprocess<float, float>(processor->getCumulativePower());
-}
-
-stdvec Measurement::getPSD()
-{
-    return postprocess<float, float>(processor->getPowerSpectrum());
-}
-
-stdvec_c Measurement::getDataSpectrum()
-{
-    return postprocess<tcf, std::complex<float>>(processor->getDataSpectrum());
-}
-
-stdvec_c Measurement::getNoiseSpectrum()
-{
-    return postprocess<tcf, std::complex<float>>(processor->getNoiseSpectrum());
-}
 
 std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(std::string request)
 {
@@ -222,9 +198,7 @@ std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(std::s
         side, std::vector<std::complex<double>>(side));
 
     // Receive data from GPU
-    if (request == "g1")
-        processor->getG1results(result);
-    else if (request == "g2_full")
+    if (request == "g2_full")
         processor->getG2FullResults(result);
     else if (request == "g2_filtered")
         processor->getG2FilteredResults(result);
@@ -244,19 +218,6 @@ std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(std::s
     return average_result;
 }
 
-stdvec_c Measurement::getRawG1()
-{
-    int len = processor->getOutSize();
-    int side = processor->getTraceLength();
-
-    hostvec_c result(len);
-
-    // Receive data from GPU
-    processor->getG1results(result);
-
-    return stdvec_c(result.begin(), result.end());
-}
-
 stdvec_c Measurement::getRawG2()
 {
     int len = processor->getOutSize();
@@ -270,16 +231,14 @@ stdvec_c Measurement::getRawG2()
     return stdvec_c(result.begin(), result.end());
 }
 
-void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace, std::vector<stdvec_c> offsets)
+void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
 {
     hostvec_c average[num_channels];
-    hostvec_c average_offsets[num_channels];
     for (int i = 0; i < num_channels; i++)
     {
         average[i] = tile(trace[i], batch_size);
-        average_offsets[i] = tile(offsets[i], batch_size);
     }
-    processor->setSubtractionTrace(average, average_offsets);
+    processor->setSubtractionTrace(average);
 }
 
 std::vector<stdvec_c> Measurement::getSubtractionData()
@@ -294,30 +253,12 @@ std::vector<stdvec_c> Measurement::getSubtractionData()
     return subtr_data;
 }
 
-std::vector<stdvec_c> Measurement::getSubtractionNoise()
-{
-    std::vector<stdvec_c> subtr_noise;
-    auto vec = processor->getCumulativeSubtrData();
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtr_noise.push_back(postprocess<tcf, std::complex<float>>(vec[i]));
-    }
-    
-    return subtr_noise;
-}
-
-std::tuple<std::vector<hostvec_c>, std::vector<hostvec_c>> Measurement::getSubtractionTrace()
+std::vector<hostvec_c> Measurement::getSubtractionTrace()
 {
     auto len = processor->getTotalLength();
     std::vector<hostvec_c> subtraction_trace;
-    std::vector<hostvec_c> subtraction_offs;
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtraction_trace[i].resize(len);
-        subtraction_offs[i].resize(len);
-    }
-    processor->getSubtractionTrace(subtraction_trace, subtraction_offs);
-    return std::make_tuple(subtraction_trace, subtraction_offs);
+    processor->getSubtractionTrace(subtraction_trace);
+    return subtraction_trace;
 }
 
 template <typename T, typename V>
