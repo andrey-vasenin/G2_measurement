@@ -46,6 +46,9 @@ public:
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
                 int second_oversampling, const char *coil_address);
+
+    Measurement(uint64_t averages, uint64_t batch, long segment, double part,
+                int second_oversampling);
                 
     void setAmplitude(int ampl);
 
@@ -65,7 +68,7 @@ public:
 
     void setFirwin(float left_cutoff, float right_cutoff);
 
-    void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2]);
+    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2);
 
     void setIntermediateFrequency(float frequency);
 
@@ -78,8 +81,10 @@ public:
     void measureTest();
 
     void setTestInput(const std::vector<int8_t> &input);
+
+    std::vector<std::vector<std::vector<std::complex<double>>>> getG1Correlator();
   
-    std::vector<std::vector<std::complex<double>>> getCorrelator(std::string request);
+    std::vector<std::vector<std::complex<double>>> getG2Correlator(std::string request);
 
     std::vector<stdvec_c> getSubtractionData();
 
@@ -87,7 +92,7 @@ public:
 
     void setSubtractionTrace(std::vector<stdvec_c> trace);
 
-    std::vector<hostvec_c> getSubtractionTrace();
+    std::vector<stdvec_c> getSubtractionTrace();
 
     int getTotalLength() { return processor->getTotalLength(); }
 

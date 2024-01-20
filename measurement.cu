@@ -51,6 +51,26 @@ Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t 
 {
 }
 
+// Constructor for test measurement
+Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double part,
+                int second_oversampling)
+{
+    dig = nullptr;
+    batch_size = batch;
+    segment_size = segment;
+    sampling_rate = 1.25E+9;
+    setAveragesNumber(averages);
+    notify_size = 2 * num_channels * segment_size * batch_size;
+    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
+    initializeBuffer();
+
+    func = [this](int8_t *data) mutable
+    { processor->compute(data); };
+    int trace_length = processor->getTraceLength();
+
+    test_input.resize(notify_size, 0);
+}
+
 Measurement::~Measurement()
 {
     if ((processor != nullptr) || (dig != nullptr))
@@ -79,11 +99,10 @@ void Measurement::resetOutput()
 void Measurement::initializeBuffer()
 {
     // Create the buffer in page-locked memory
-    size_t buffersize = 4 * notify_size;
+    size_t buffersize = 4 * notify_size; // buffersize should be a multiple of 4 kByte
     processor->createBuffer(buffersize);
-    // size_t interbuffersize = processor->getInterBufferSize();
-    processor->createInterBuffer(buffersize / num_channels);
-    dig->setBuffer(processor->getBuffer(), buffersize);
+    if (dig != nullptr)
+        dig->setBuffer(processor->getBuffer(), buffersize);
 }
 
 void Measurement::setCurrents(float wc, float oc)
@@ -118,15 +137,25 @@ void Measurement::setCalibration(float r, float phi, float offset_i, float offse
 }
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
-{
-    int oversampling = static_cast<int>(std::round(1.25E+9f / dig->getSamplingRate()));
+{   
+    long sr = 0;
+    if (dig != nullptr)
+        sr = dig->getSamplingRate();
+    else 
+        sr = sampling_rate;
+    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setFirwin(left_cutoff, right_cutoff, oversampling);
     cudaDeviceSynchronize();
 }
 
-void Measurement::setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2])
+void Measurement::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2)
 {
-    int oversampling = static_cast<int>(std::round(1.25E+9f / dig->getSamplingRate()));
+    long sr = 0;
+    if (dig != nullptr)
+        sr = dig->getSamplingRate();
+    else 
+        sr = sampling_rate;
+    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
     cudaDeviceSynchronize();
 }
@@ -150,19 +179,20 @@ void Measurement::asyncCurrentSwitch()
 void Measurement::measureWithCoil()
 {
     coil->set_current(offset_current);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     dig->prepareFifo(notify_size);
     dig->launchFifo(notify_size, iters_num, func, true);
     iters_done += iters_num;
 
-    uint64_t iters_delay = static_cast<size_t>(sampling_rate) / notify_size * 2;
+    // uint64_t iters_delay = static_cast<size_t>(sampling_rate) / notify_size * 2;
     // auto a = std::async(std::launch::async, &Measurement::asyncCurrentSwitch, this);
     // dig->launchFifo(notify_size, iters_delay, func, false);
     // a.wait();
 
     std::thread t1(&Measurement::asyncCurrentSwitch, this);
     // std::thread t2 (&Digitizer::launchFifo, dig, notify_size, iters_delay, func, false);
-    dig->launchFifo(notify_size, iters_delay, func, false);
+    // dig->launchFifo(notify_size, iters_delay, func, false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     t1.join();
     // t2.join();
     // asyncCurrentSwitch();
@@ -177,6 +207,7 @@ void Measurement::measureTest()
     for (uint32_t i = 0; i < iters_num; i++)
         func(test_input.data());
     iters_done += iters_num;
+    // std::cout << "iters done " << iters_done << std::endl; 
 }
 
 void Measurement::setTestInput(const std::vector<int8_t> &input)
@@ -187,33 +218,53 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
     test_input = tile(input, batch_size);
 }
 
-
-std::vector<std::vector<std::complex<double>>> Measurement::getCorrelator(std::string request)
+std::vector<std::vector<std::vector<std::complex<double>>>> Measurement::getG1Correlator()
 {
-    int len = processor->getOutSize();
     int side = processor->getTraceLength();
+    // std::vector<std::vector<std::complex<double>>> average_result(
+    //     side, std::vector<std::complex<double>>(side));
+    std::vector<std::vector<std::vector<std::complex<double>>>> average_results(
+        3, std::vector<std::vector<std::complex<double>>>(
+               side, std::vector<std::complex<double>>(side)));
+    // Receive data from GPU
+    auto result = processor->getG1Results();
+    
+    // Divide the data by a number of traces measured
+    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    for (int i = 0; i < 3; i++)
+    {
+    for (int t1 = 0; t1 < side; t1++)
+        for (int t2 = t1; t2 < side; t2++)
+        {
+            average_results[i][t1][t2] = std::complex<float>(result[i][t1 * side + t2] / X);
+            average_results[i][t2][t1] = average_results[i][t1][t2];
+        }
+    }    
+    return average_results;
+}
 
-    hostvec_c result(len);
+std::vector<std::vector<std::complex<double>>> Measurement::getG2Correlator(std::string request)
+{
+    int side = processor->getTraceLength();
     std::vector<std::vector<std::complex<double>>> average_result(
         side, std::vector<std::complex<double>>(side));
 
     // Receive data from GPU
-    if (request == "g2_full")
-        processor->getG2FullResults(result);
-    else if (request == "g2_filtered")
-        processor->getG2FilteredResults(result);
-    else
-        throw std::runtime_error("Request is not correct");
-    
+    auto result = (request == "g2_filtered") ? processor->getG2FilteredResults() : processor->getG2FullResults();
+
     // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done * batch_size) : 1.f, 0.f);
-  
+    auto g1_results = getG1Correlator();
+    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = t1; t2 < side; t2++)
         {
-            average_result[t1][t2] = std::complex<float>(result[t1 * side + t2]);
-            average_result[t2][t1] = std::conj(average_result[t1][t2]);
+            average_result[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+            average_result[t1][t2] = average_result[t1][t2] - std::conj(g1_results[0][t2][t1]) * g1_results[1][t1][t2] + std::abs(g1_results[2][t1][t2]) * std::abs(g1_results[2][t1][t2]); 
+            // average_result[t2][t1] = std::conj(average_result[t1][t2]);
+            average_result[t2][t1] = average_result[t1][t2];
         }
+
+    
         
     return average_result;
 }
@@ -223,10 +274,10 @@ stdvec_c Measurement::getRawG2()
     int len = processor->getOutSize();
     int side = processor->getTraceLength();
 
-    hostvec_c result(len);
+    // hostvec_c result(len);
 
     // Receive data from GPU
-    processor->getG2FullResults(result);
+    auto result = processor->getG2FullResults();
 
     return stdvec_c(result.begin(), result.end());
 }
@@ -236,11 +287,11 @@ void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
     hostvec_c average[num_channels];
     for (int i = 0; i < num_channels; i++)
     {
-        average[i] = tile(trace[i], batch_size);
+        average[i] = trace[i];
     }
     processor->setSubtractionTrace(average);
 }
-
+// returns newly received data and saved like subtraction_data 
 std::vector<stdvec_c> Measurement::getSubtractionData()
 {
     std::vector<stdvec_c> subtr_data;
@@ -253,10 +304,11 @@ std::vector<stdvec_c> Measurement::getSubtractionData()
     return subtr_data;
 }
 
-std::vector<hostvec_c> Measurement::getSubtractionTrace()
+// returns traces which were subtracted from data last time
+std::vector<stdvec_c> Measurement::getSubtractionTrace()
 {
     auto len = processor->getTotalLength();
-    std::vector<hostvec_c> subtraction_trace;
+    std::vector<stdvec_c> subtraction_trace;
     processor->getSubtractionTrace(subtraction_trace);
     return subtraction_trace;
 }
