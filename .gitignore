@@ -8,3 +8,5 @@ eigen-3.4.0
 old_files
 x64
 changes.txt
+*.py
+*.ipynb
