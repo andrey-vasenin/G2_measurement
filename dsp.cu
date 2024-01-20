@@ -29,7 +29,7 @@
 #include <thrust/iterator/constant_iterator.h>
 #include "npp_status_check.h"
 
-// #define _DEBUG1
+#define _DEBUG1
 
 inline void check_cufft_error(cufftResult cufft_err, std::string &&msg)
 {
@@ -67,12 +67,12 @@ inline void print_vector(thrust::device_vector<T> &vec, int n)
     std::cout << std::endl;
 }
 
-inline void print_gpu_buff(gpubuf vec, int n)
-{
-    cudaDeviceSynchronize();
-    thrust::copy(vec.begin(), vec.begin() + n, std::ostream_iterator<int>(std::cout, " "));
-    std::cout << std::endl;
-}
+// inline void print_gpu_buff(gpubuf vec, int n)
+// {
+//     cudaDeviceSynchronize();
+//     thrust::copy(vec.begin(), vec.begin() + n, std::ostream_iterator<int>(std::cout, " "));
+//     std::cout << std::endl;
+// }
 
 // DSP constructor
 dsp::dsp(size_t len, uint64_t n, double part,
@@ -82,7 +82,8 @@ dsp::dsp(size_t len, uint64_t n, double part,
                                                        oversampling{second_oversampling},
                                                        resampled_trace_length{trace_length / oversampling},
                                                        resampled_total_length{total_length / oversampling},
-                                                       out_size{trace_length * trace_length}
+                                                       out_size{trace_length * trace_length},
+                                                       pitch{len}
 
 {
     downconversion_coeffs.resize(total_length, tcf(0.f));
@@ -91,6 +92,8 @@ dsp::dsp(size_t len, uint64_t n, double part,
     subtraction_trace2.resize(total_length, tcf(0.f));
     // corr_firwin1.resize(total_length, tcf(0.f));
     // corr_firwin2.resize(total_length, tcf(0.f));
+    // Allocate arrays on GPU for every stream
+    gpu_data_buf.resize(total_length, char4{0,0,0,0});
     
     
     // Streams
@@ -101,8 +104,7 @@ dsp::dsp(size_t len, uint64_t n, double part,
         check_npp_error(nppGetStreamContext(&streamContexts[i]), "Npp Error GetStreamContext");
         streamContexts[i].hStream = streams[i];
 
-        // Allocate arrays on GPU for every stream
-        gpu_data_buf[i].resize(2 * total_length, int8_t(0));
+        
 
         // Allocate arrays on GPU for every channel of digitizer
         data1[i].resize(total_length, tcf(0.f));
@@ -131,12 +133,8 @@ dsp::dsp(size_t len, uint64_t n, double part,
         // Initialize cuBLAS
         check_cublas_error(cublasCreate(&cublas_handles[i]),
                            "Error initializing a cuBLAS handle\n");
-        check_cublas_error(cublasCreate(&cublas_handles2[i]),
-                           "Error initializing a cuBLAS handle\n");
         // Assign streams to cuBLAS handles
         check_cublas_error(cublasSetStream(cublas_handles[i], streams[i]),
-                           "Error assigning a stream to a cuBLAS handle\n");
-        check_cublas_error(cublasSetStream(cublas_handles2[i], streams[i]),
                            "Error assigning a stream to a cuBLAS handle\n");
     }
 }
@@ -149,7 +147,6 @@ dsp::~dsp()
     {
         // Destroy cuBLAS
         cublasDestroy(cublas_handles[i]);
-        cublasDestroy(cublas_handles2[i]);
 
         // Destroy cuFFT plans
         cufftDestroy(plans[i]);
@@ -276,16 +273,13 @@ void dsp::compute(const hostbuf buffer_ptr)
     const int stream_num = semaphore;
     switchStream();
 
-    divideDataFromDifferentChannels(buffer_ptr, gpu_data_buf[stream_num], 0, stream_num);
-    convertDataToMillivolts(data1[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
+    copyDataFromBuffer(buffer_ptr, gpu_data_buf, stream_num);
+    splitAndConvertDataToMillivolts(data1[stream_num], data2[stream_num], gpu_data_buf, streams[stream_num]);
     applyDownConversionCalibration(data1[stream_num], streams[stream_num]);
     applyFilter(data1[stream_num], firwin, stream_num);
     downconvert(data1[stream_num], stream_num);
     subtractDataFromOutput(subtraction_trace1, data1[stream_num], stream_num);
     addDataToOutput(data1[stream_num], subtraction_data1[stream_num], stream_num);
-
-    divideDataFromDifferentChannels(buffer_ptr, gpu_data_buf[stream_num], 1, stream_num);
-    convertDataToMillivolts(data2[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
     applyDownConversionCalibration(data2[stream_num], streams[stream_num]);
     applyFilter(data2[stream_num], firwin, stream_num);
     downconvert(data2[stream_num], stream_num);
@@ -310,27 +304,25 @@ void dsp::compute(const hostbuf buffer_ptr)
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
-void dsp::divideDataFromDifferentChannels(const hostbuf buffer_ptr,
-                                          gpubuf &dst, size_t offset, int stream_num)
+void dsp::copyDataFromBuffer(const hostbuf buffer_ptr,
+                                          gpubuf &dst, int stream_num)
 {
-    size_t width = 2 * sizeof(int8_t);
-    size_t src_pitch = 2 * num_channels * sizeof(int8_t);
+    size_t width = 2 * num_channels * trace_length * sizeof(int8_t);
+    size_t src_pitch = 2 * num_channels * pitch * sizeof(int8_t);
     size_t dst_pitch = width;
-    size_t shift = num_channels * offset;
-    size_t height = batch_size * trace_length;
+    size_t height = batch_size;
     handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
-                                  static_cast<const void *>(buffer_ptr + shift), src_pitch, width, height,
+                                  static_cast<const void *>(buffer_ptr), src_pitch, width, height,
                                   cudaMemcpyHostToDevice, streams[stream_num]));
 }
 
 // Converts bytes into 32-bit floats with mV dimensionality
-void dsp::convertDataToMillivolts(gpuvec_c &data, const gpubuf &gpu_buf, const cudaStream_t &stream)
+void dsp::splitAndConvertDataToMillivolts(gpuvec_c &data_left, gpuvec_c &data_right, const gpubuf &gpu_buf, const cudaStream_t &stream)
 {
-    using iter = gpubuf::const_iterator;
-    strided_range<iter> channelI(gpu_buf.begin(), gpu_buf.end(), 2);
-    strided_range<iter> channelQ(gpu_buf.begin() + 1, gpu_buf.end(), 2);
-    thrust::transform(thrust::cuda::par_nosync.on(stream),
-                      channelI.begin(), channelI.end(), channelQ.begin(), data.begin(), millivolts_functor(scale));
+    auto begin = thrust::make_zip_iterator(gpu_buf.begin(), data_left.begin(), data_right.begin());
+    auto end = thrust::make_zip_iterator(gpu_buf.end(), data_left.end(), data_right.end());
+    thrust::for_each(thrust::cuda::par_nosync.on(stream),
+                      begin, end, thrust::make_zip_function(millivolts_functor(scale)));
 }
 
 // Applies the filter with the specified window to the data using FFT convolution
@@ -454,7 +446,6 @@ void dsp::calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power,
     using namespace std::string_literals;
     check_cublas_error(cublas_status,
                        "Error of rank-2 update (data) with code #"s + std::to_string(cublas_status));
-    handleError(cudaDeviceSynchronize());
 }
 
 template <typename T>

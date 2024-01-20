@@ -17,7 +17,7 @@
 #include <thrust/mr/allocator.h>
 #include <thrust/system/cuda/memory_resource.h>
 
-const int num_streams = 2;
+const int num_streams = 3;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
 const int num_channels = 2; // number of used digitizer channels
@@ -27,7 +27,7 @@ typedef thrust::device_vector<float> gpuvec;
 typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
-typedef thrust::device_vector<int8_t> gpubuf;
+typedef thrust::device_vector<char4> gpubuf;
 typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
@@ -56,9 +56,11 @@ class dsp
     hostbuf buffer;
 
     /* Pointers to arrays with data */
-    gpubuf gpu_data_buf[num_streams];  // buffers for loading data
+    gpubuf gpu_data_buf;  // buffers for loading data
     gpuvec_c data1[num_streams];
     gpuvec_c data2[num_streams];
+    gpuvec_c data1_resampled[num_streams];
+    gpuvec_c data2_resampled[num_streams];
     gpuvec_c subtraction_data1[num_streams];
     gpuvec_c subtraction_data2[num_streams];
     gpuvec_c data_for_correlation1[num_streams];
@@ -109,7 +111,6 @@ private:
 
     /* cuBLAS required variables */
     cublasHandle_t cublas_handles[num_streams];
-    cublasHandle_t cublas_handles2[num_streams];
 
     /* NVIDIA Performance Primitives required variables */
     NppStreamContext streamContexts[num_streams];
@@ -174,10 +175,10 @@ protected:
 
     void switchStream() { semaphore = (semaphore < (num_streams - 1)) ? semaphore + 1 : 0; };
 
-    void divideDataFromDifferentChannels(const hostbuf buffer_ptr, 
-                                        gpubuf &dst, size_t offset, int stream_num);
+    void copyDataFromBuffer(const hostbuf buffer_ptr, 
+                                        gpubuf &dst, int stream_num);
 
-    void convertDataToMillivolts(gpuvec_c &data, const gpubuf &gpu_buf, const cudaStream_t &stream);
+    void splitAndConvertDataToMillivolts(gpuvec_c &data_left, gpuvec_c &data_right, const gpubuf &gpu_buf, const cudaStream_t &stream);
 
     void downconvert(gpuvec_c &data, int stream_num);
 

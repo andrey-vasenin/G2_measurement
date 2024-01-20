@@ -24,15 +24,18 @@ struct calibration_functor : thrust::unary_function<tcf &, void>
 };
 
 
-struct millivolts_functor : thrust::binary_function<const char &, const char &, tcf>
+struct millivolts_functor
 {
     const float scale;
 
     millivolts_functor(float s) : scale(s) {}
 
-    __device__ inline tcf operator()(const char &i, const char &q)
+    __device__ inline void operator()(const char4 &b, tcf &d1, tcf &d2)
     {
-        return tcf(static_cast<float>(i) * scale, static_cast<float>(q) * scale);
+        d1.real(static_cast<float>(b.x) * scale);
+        d1.imag(static_cast<float>(b.y) * scale);
+        d2.real(static_cast<float>(b.z) * scale);
+        d2.imag(static_cast<float>(b.w) * scale);
     }
 };
 

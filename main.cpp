@@ -22,14 +22,14 @@ int main()
 
             dig->setupChannels(channels, amps, 4);
 
-            dig->setSamplingRate(1250000000 / 8);
+            dig->setSamplingRate(1250000000 / 4);
             dig->setExt0TriggerOnPositiveEdge(1000);
-            dig->setupMultRecFifoMode(384, 32, 0);
+            dig->setupMultRecFifoMode(800, 32, 0);
             // dig->autoTrigger();
             // dig->setupSingleRecFifoMode(32);
             // dig->setSegmentSize(384);
         }
-        auto mes = std::make_unique<Measurement>(dig, 1 << 15, 1 << 8, part, second_oversampling, "yok1");
+        auto mes = std::make_unique<Measurement>(dig, 1 << 15, 1 << 7, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
         mes->setCalibration(1, 0, 0, 0);
@@ -48,7 +48,7 @@ int main()
         auto st = mes->getSubtractionTrace();
         tcf a = st[0][0];
         tcf b = sd[0][0];
-        std::cout << a - b << std::endl;
+        std::cout << a << ' ' << b << std::endl;
         auto g2 = mes->getG2Correlator("g2_full");
         std::cout << g2[0][0] << std::endl;
 
