@@ -18,13 +18,15 @@ using namespace pybind11::literals;
 PYBIND11_MODULE(g2_measurement, m)
 {
     py::class_<Measurement>(m, "G2Measurer", py::module_local())
-        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, const char *>(), output_and_gil_guard())
+        .def(py::init<std::uintptr_t, unsigned long long, unsigned long long, double, int, const char *>(), output_and_gil_guard())
+        // .def(py::init<unsigned long long, int, long, int>(), output_and_gil_guard()) // for test inputs with out digitizer
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
         .def("set_correlation_firwin", &Measurement::setCorrelationFirwin, output_and_gil_guard())
         .def("measure", &Measurement::measure, output_and_gil_guard())
         .def("measure_with_coil", &Measurement::measureWithCoil, output_and_gil_guard())
-        .def("get_correlator", &Measurement::getCorrelator, output_and_gil_guard())
+        .def("get_g1_correlator", &Measurement::getG1Correlator, output_and_gil_guard())
+        .def("get_g2_correlator", &Measurement::getG2Correlator, output_and_gil_guard())
         .def("get_raw_g2", &Measurement::getRawG2, output_and_gil_guard())
         .def("reset", &Measurement::reset, output_and_gil_guard())
         .def("reset_output", &Measurement::resetOutput, output_and_gil_guard())
