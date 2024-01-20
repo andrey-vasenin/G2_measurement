@@ -131,6 +131,11 @@ void Digitizer::setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int se
     this->handleError();
 }
 
+void Digitizer::setSegmentSize(int32 segmentsize)
+{
+    spcm_dwSetParam_i32(handle, SPC_SEGMENTSIZE, segmentsize);
+}
+
 void::Digitizer::setupSingleRecFifoMode(int32 pretrigger)
 {
     spcm_dwSetParam_i32(handle, SPC_CARDMODE, SPC_REC_FIFO_SINGLE);
@@ -178,6 +183,7 @@ size_t Digitizer::getMemsize()
 
 void Digitizer::prepareFifo(uint32 notifysize)
 {
+    // Define the host buffer for the digitizer
     spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
                            &buffer[0], 0, buffersize);
     this->handleError();
@@ -221,13 +227,8 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
             {
             case ERR_FIFOHWOVERRUN:
                 std::cerr << exc.what() << std::endl;
-#ifdef _DEBUG
-#endif // _DEBUG
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_STOP);
-                spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
-                                       &buffer[0], 0, buffersize);
-                this->handleError();
-                spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
+                prepareFifo(notifysize);
                 continue;
             case ERR_TIMEOUT:
                 std::cerr << exc.what() << std::endl;
@@ -243,7 +244,7 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
         this->handleError();
         if (availBytes < notifysize)
         {
-#ifdef _DEBUG
+#ifdef NDEBUG
             std::cerr << "not enough bytes available\n";
 #endif // _DEBUG
             continue;

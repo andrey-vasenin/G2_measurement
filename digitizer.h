@@ -73,6 +73,8 @@ public:
     /* Mode setters */
     void setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int segments);
 
+    void setSegmentSize(int32 segmentsize);
+
     void setupSingleRecFifoMode(int32 pretrigger);
 
     /* Measurers */
