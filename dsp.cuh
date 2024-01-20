@@ -6,6 +6,7 @@
 #define CPPMEASUREMENT_DSP_CUH
 
 #include <nppdefs.h>
+#include <cuComplex.h>
 #include <vector>
 #include <complex>
 #include <cufft.h>
@@ -16,7 +17,7 @@
 #include <thrust/mr/allocator.h>
 #include <thrust/system/cuda/memory_resource.h>
 
-const int num_streams = 4;
+const int num_streams = 2;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
 const int num_channels = 2; // number of used digitizer channels
@@ -26,7 +27,7 @@ typedef thrust::device_vector<float> gpuvec;
 typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
-typedef thrust::device_vector<char> gpubuf;
+typedef thrust::device_vector<int8_t> gpubuf;
 typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
@@ -53,7 +54,6 @@ class dsp
 {
     /* Pointer */
     hostbuf buffer;
-    hostbuf inter_buffer; // intermediate buffer for loading data from different digitizer channels 
 
     /* Pointers to arrays with data */
     gpubuf gpu_data_buf[num_streams];  // buffers for loading data
@@ -64,12 +64,17 @@ class dsp
     gpuvec_c data_for_correlation1[num_streams];
     gpuvec_c data_for_correlation2[num_streams];
 
+    gpuvec_c g1_cross_out[num_streams];
+    gpuvec_c g1_left_out[num_streams];
+    gpuvec_c g1_right_out[num_streams];
     gpuvec_c g2_out[num_streams];
     gpuvec_c g2_out_filtered[num_streams];
+    gpuvec_c cross_power[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
-    gpuvec_c corr_firwin[2];
+    gpuvec_c corr_firwin1;
+    gpuvec_c corr_firwin2;
 
     /* Subtraction traces */
     gpuvec_c subtraction_trace1;
@@ -90,7 +95,11 @@ private:
     size_t resampled_total_length;
     size_t out_size;
     int semaphore = 0;           // for selecting the current stream
-    float scale = 500.f / 128.f; // for conversion into mV
+    float scale = 500.f / 128.f; // for conversion into mV // max int8 is 127
+
+    const cuComplex alpha = make_cuComplex(1, 0);
+    const cuComplex beta = make_cuComplex(1, 0);
+    const float beta_float = 1.0;
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
@@ -121,7 +130,7 @@ public:
 
     void setFirwin(float cutoff_l, float cutoff_r, int oversampling = 1);
 
-    void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2], int oversampling = 1);
+    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int oversampling = 1);
 
     void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, int oversampling = 1);
 
@@ -131,27 +140,25 @@ public:
 
     std::vector<hostvec_c> getCumulativeSubtrData();
   
-    gpuvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
+    hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
-    void getG2FullResults(hostvec_c &result);
+    std::vector<hostvec_c> getG1Results();
 
-    void getG2FilteredResults(hostvec_c &result);
+    hostvec_c getG2FullResults();
+
+    hostvec_c getG2FilteredResults();
 
     void setDownConversionCalibrationParameters(float r, float phi, float offset_i, float offset_q);
 
     void setSubtractionTrace(hostvec_c trace[num_channels]);
 
-    void getSubtractionTrace(std::vector<hostvec_c> &trace);
+    void getSubtractionTrace(std::vector<stdvec_c> &trace);
 
     void resetSubtractionTrace();
 
     void createBuffer(size_t size);
 
     void deleteBuffer();
-
-    void createInterBuffer(size_t size);
-
-    void deleteInterBuffer();
 
     hostbuf getBuffer();
 
@@ -186,7 +193,9 @@ protected:
 
     void normalize(gpuvec_c &data, float coeff, int stream_num);
 
-    void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
+    void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
+
+    void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

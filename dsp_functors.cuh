@@ -23,6 +23,7 @@ struct calibration_functor : thrust::unary_function<tcf &, void>
     }
 };
 
+
 struct millivolts_functor : thrust::binary_function<const char &, const char &, tcf>
 {
     const float scale;
