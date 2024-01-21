@@ -244,9 +244,9 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
         this->handleError();
         if (availBytes < notifysize)
         {
-#ifdef NDEBUG
+// #ifdef _DEBUG
             std::cerr << "not enough bytes available\n";
-#endif // _DEBUG
+// #endif // _DEBUG
             continue;
         }
         if (computing) 

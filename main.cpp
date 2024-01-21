@@ -13,7 +13,7 @@ int main()
     using std::chrono::milliseconds;
 
     double part = 1;
-    int second_oversampling = 4;
+    int second_oversampling = 2;
     try {
         auto dig = new Digitizer("/dev/spcm1");
         if (dig) { // Check if dig is not null
@@ -23,13 +23,13 @@ int main()
             dig->setupChannels(channels, amps, 4);
 
             dig->setSamplingRate(1250000000 / 4);
-            dig->setExt0TriggerOnPositiveEdge(1000);
-            dig->setupMultRecFifoMode(800, 32, 0);
-            // dig->autoTrigger();
-            // dig->setupSingleRecFifoMode(32);
-            // dig->setSegmentSize(384);
+            // dig->setExt0TriggerOnPositiveEdge(1000);
+            // dig->setupMultRecFifoMode(800, 32, 0);
+            dig->autoTrigger();
+            dig->setupSingleRecFifoMode(32);
+            dig->setSegmentSize(800);
         }
-        auto mes = std::make_unique<Measurement>(dig, 1 << 15, 1 << 7, part, second_oversampling, "yok1");
+        auto mes = std::make_unique<Measurement>(dig, 1 << 26, 1 << 10, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
         mes->setCalibration(1, 0, 0, 0);

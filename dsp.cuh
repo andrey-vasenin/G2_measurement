@@ -17,7 +17,7 @@
 #include <thrust/mr/allocator.h>
 #include <thrust/system/cuda/memory_resource.h>
 
-const int num_streams = 3;
+const int num_streams = 2;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
 const int num_channels = 2; // number of used digitizer channels
@@ -56,7 +56,7 @@ class dsp
     hostbuf buffer;
 
     /* Pointers to arrays with data */
-    gpubuf gpu_data_buf;  // buffers for loading data
+    gpubuf gpu_data_buf[num_streams];  // buffers for loading data
     gpuvec_c data1[num_streams];
     gpuvec_c data2[num_streams];
     gpuvec_c data1_resampled[num_streams];
