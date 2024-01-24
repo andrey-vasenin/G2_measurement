@@ -116,7 +116,7 @@ private:
     NppStreamContext streamContexts[num_streams];
 
     /* Down-conversion calibration variables */
-    float a_qi, a_qq, c_i, c_q;
+    float a_qi[num_channels], a_qq[num_channels], c_i[num_channels], c_q[num_channels];
 
 public:
     dsp(size_t len, uint64_t n, double part, double samplerate, int second_oversampling);
@@ -128,6 +128,16 @@ public:
     int getTotalLength();
 
     int getOutSize();
+
+    int getResampledTraceLength()
+    {
+        return resampled_trace_length;
+    };
+
+    int getResampledTotalLength()
+    {
+        return resampled_total_length;
+    }
 
     void setFirwin(float cutoff_l, float cutoff_r, int oversampling = 1);
 
@@ -143,13 +153,15 @@ public:
   
     hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
-    std::vector<hostvec_c> getG1Results();
+    std::tuple<hostvec_c, hostvec_c, hostvec_c> getG1Results();
+
+    hostvec_c getG1CrossResults();
 
     hostvec_c getG2FullResults();
 
     hostvec_c getG2FilteredResults();
 
-    void setDownConversionCalibrationParameters(float r, float phi, float offset_i, float offset_q);
+    void setDownConversionCalibrationParameters(int channel_num, float r, float phi, float offset_i, float offset_q);
 
     void setSubtractionTrace(hostvec_c trace[num_channels]);
 
@@ -182,7 +194,7 @@ protected:
 
     void downconvert(gpuvec_c &data, int stream_num);
 
-    void applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream);
+    void applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream, int channel_num);
 
     void addDataToOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
 
@@ -196,7 +208,11 @@ protected:
 
     void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
 
+    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle);
+
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
+
+    void calculateG2gemm(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

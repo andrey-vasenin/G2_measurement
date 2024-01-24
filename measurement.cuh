@@ -15,6 +15,10 @@
 
 // namespace py = pybind11;
 
+using corr_t = std::vector<std::vector<std::complex<double>>>;
+using trace_t = std::vector<std::complex<double>>;
+
+
 class Measurement
 {
 private:
@@ -49,6 +53,8 @@ public:
 
     Measurement(uint64_t averages, uint64_t batch, long segment, double part,
                 int second_oversampling);
+    
+    void setDigParameters();
                 
     void setAmplitude(int ampl);
 
@@ -64,7 +70,7 @@ public:
 
     void free();
 
-    void setCalibration(float r, float phi, float offset_i, float offset_q);
+    void setCalibration(int line_num, float r, float phi, float offset_i, float offset_q);
 
     void setFirwin(float left_cutoff, float right_cutoff);
 
@@ -82,9 +88,9 @@ public:
 
     void setTestInput(const std::vector<int8_t> &input);
 
-    std::vector<std::vector<std::vector<std::complex<double>>>> getG1Correlator();
+    std::tuple<corr_t, corr_t, corr_t> getG1Correlators();
   
-    std::vector<std::vector<std::complex<double>>> getG2Correlator(std::string request);
+    std::tuple<corr_t, corr_t, corr_t, corr_t> getAllCorrelators();
 
     std::vector<stdvec_c> getSubtractionData();
 

@@ -21,6 +21,7 @@
 #include <thread>
 
 
+
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
                          int second_oversampling, const char *coil_address)
 {
@@ -42,6 +43,19 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     int trace_length = processor->getTraceLength();
 
     test_input.resize(notify_size * 2, 0);
+}
+
+void Measurement::setDigParameters()
+{
+    int channels[] = {0, 1, 2, 3};
+    int amps[] = {1000, 1000, 1000, 1000};
+
+    dig->setupChannels(channels, amps, 4);
+
+    dig->setSamplingRate(1250000000 / 4);
+    dig->setupSingleRecFifoMode(32);
+    dig->setSegmentSize(800);
+
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
@@ -131,9 +145,9 @@ void Measurement::setAveragesNumber(uint64_t averages)
     iters_done = 0;
 }
 
-void Measurement::setCalibration(float r, float phi, float offset_i, float offset_q)
+void Measurement::setCalibration(int line_num, float r, float phi, float offset_i, float offset_q)
 {
-    processor->setDownConversionCalibrationParameters(r, phi, offset_i, offset_q);
+    processor->setDownConversionCalibrationParameters(line_num, r, phi, offset_i, offset_q);
 }
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
@@ -171,8 +185,9 @@ void Measurement::measure()
 void Measurement::asyncCurrentSwitch()
 {
     coil->set_current(working_current);
-    setSubtractionTrace(getSubtractionData());
+    auto subtr_trace = getSubtractionData();
     resetOutput();
+    setSubtractionTrace(subtr_trace);
     cudaDeviceSynchronize();
 }
 
@@ -218,16 +233,18 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
     test_input = tile(input, batch_size);
 }
 
-std::vector<std::vector<std::vector<std::complex<double>>>> Measurement::getG1Correlator()
+std::tuple<corr_t, corr_t, corr_t> Measurement::getG1Correlators()
 {
-    int side = processor->getTraceLength();
-    // std::vector<std::vector<std::complex<double>>> average_result(
+    int side = processor->getResampledTraceLength();
+    // std::vector<std::vector<std::complex<double>>>   avg_g2(
     //     side, std::vector<std::complex<double>>(side));
-    std::vector<std::vector<std::vector<std::complex<double>>>> average_results(
-        3, std::vector<std::vector<std::complex<double>>>(
-               side, std::vector<std::complex<double>>(side)));
+
+    corr_t avg_gll(side, trace_t(side));
+    corr_t avg_grr(side, trace_t(side));
+    corr_t avg_glr(side, trace_t(side));
+
     // Receive data from GPU
-    auto result = processor->getG1Results();
+    auto corrs = processor->getG1Results();
     
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
@@ -236,46 +253,43 @@ std::vector<std::vector<std::vector<std::complex<double>>>> Measurement::getG1Co
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = t1; t2 < side; t2++)
         {
-            average_results[i][t1][t2] = std::complex<float>(result[i][t1 * side + t2] / X);
-            average_results[i][t2][t1] = average_results[i][t1][t2];
+            avg_gll[t1][t2] = std::complex<float>(std::get<0>(corrs)[t1 * side + t2] / X);
+            avg_gll[t2][t1] = std::conj(avg_gll[t1][t2]);
+            avg_grr[t1][t2] = std::complex<float>(std::get<1>(corrs)[t1 * side + t2] / X);
+            avg_grr[t2][t1] = std::conj(avg_grr[t1][t2]);
+            avg_glr[t1][t2] = std::complex<float>(std::get<2>(corrs)[t1 * side + t2] / X);
+            avg_glr[t2][t1] = avg_glr[t1][t2];
         }
     }    
-    return average_results;
+    return std::make_tuple(avg_gll, avg_grr, avg_glr);
 }
 
-std::vector<std::vector<std::complex<double>>> Measurement::getG2Correlator(std::string request)
+std::tuple<corr_t, corr_t, corr_t, corr_t> Measurement::getAllCorrelators()
 {
-    int side = processor->getTraceLength();
-    std::vector<std::vector<std::complex<double>>> average_result(
-        side, std::vector<std::complex<double>>(side));
+    int side = processor->getResampledTraceLength();
+    corr_t avg_g2(side, trace_t(side));
 
     // Receive data from GPU
-    auto result = (request == "g2_filtered") ? processor->getG2FilteredResults() : processor->getG2FullResults();
+    auto result = processor->getG2FullResults();
 
     // Divide the data by a number of traces measured
-    auto g1_results = getG1Correlator();
+    auto g1 = getG1Correlators();
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = t1; t2 < side; t2++)
         {
-            average_result[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-            average_result[t1][t2] = average_result[t1][t2] - std::conj(g1_results[0][t2][t1]) * g1_results[1][t1][t2] + std::abs(g1_results[2][t1][t2]) * std::abs(g1_results[2][t1][t2]); 
-            // average_result[t2][t1] = std::conj(average_result[t1][t2]);
-            average_result[t2][t1] = average_result[t1][t2];
+            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+            // avg_g2[t1][t2] =  avg_g2[t1][t2] - std::conj(std::get<0>(g1)[t2][t1]) * std::get<1>(g1)[t1][t2] + std::abs(std::get<2>(g1)[t1][t2]) * std::abs(std::get<2>(g1)[t1][t2]); 
+            //  avg_g2[t2][t1] = std::conj  avg_g2[t1][t2]);
+            avg_g2[t2][t1] =  avg_g2[t1][t2];
         }
-
     
-        
-    return average_result;
+    return std::make_tuple(std::get<0>(g1), std::get<1>(g1), std::get<2>(g1), avg_g2);
 }
 
 stdvec_c Measurement::getRawG2()
 {
-    int len = processor->getOutSize();
-    int side = processor->getTraceLength();
-
-    // hostvec_c result(len);
-
     // Receive data from GPU
     auto result = processor->getG2FullResults();
 
@@ -307,7 +321,6 @@ std::vector<stdvec_c> Measurement::getSubtractionData()
 // returns traces which were subtracted from data last time
 std::vector<stdvec_c> Measurement::getSubtractionTrace()
 {
-    auto len = processor->getTotalLength();
     std::vector<stdvec_c> subtraction_trace;
     processor->getSubtractionTrace(subtraction_trace);
     return subtraction_trace;

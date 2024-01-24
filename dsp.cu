@@ -237,20 +237,20 @@ void dsp::downconvert(gpuvec_c &data, int stream_num)
     check_npp_error(status, "Error with downconversion");
 }
 
-void dsp::setDownConversionCalibrationParameters(float r, float phi,
+void dsp::setDownConversionCalibrationParameters(int channel_num, float r, float phi,
                                                  float offset_i, float offset_q)
 {
-    a_qi = std::tan(phi);
-    a_qq = 1 / (r * std::cos(phi));
-    c_i = offset_i;
-    c_q = offset_q;
+    a_qi[channel_num] = std::tan(phi);
+    a_qq[channel_num] = 1 / (r * std::cos(phi));
+    c_i[channel_num] = offset_i;
+    c_q[channel_num] = offset_q;
 }
 
 // Applies down-conversion calibration to traces
-void dsp::applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream)
+void dsp::applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream, int channel_num)
 {
     auto sync_exec_policy = thrust::cuda::par_nosync.on(stream);
-    thrust::for_each(sync_exec_policy, data.begin(), data.end(), calibration_functor(a_qi, a_qq, c_i, c_q));
+    thrust::for_each(sync_exec_policy, data.begin(), data.end(), calibration_functor(a_qi[channel_num], a_qq[channel_num], c_i[channel_num], c_q[channel_num]));
 }
 // Fills with zeros the arrays for results output in the GPU memory
 void dsp::resetOutput()
@@ -279,7 +279,7 @@ void dsp::compute(const hostbuf buffer_ptr)
     splitAndConvertDataToMillivolts(data1[stream_num], data2[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
     
     // Preprocessing Data 1
-    applyDownConversionCalibration(data1[stream_num], streams[stream_num]);
+    applyDownConversionCalibration(data1[stream_num], streams[stream_num], 0);
     applyFilter(data1[stream_num], firwin, stream_num);
     downconvert(data1[stream_num], stream_num);
     resample(data1[stream_num], data1_resampled[stream_num], streams[stream_num]);
@@ -287,7 +287,7 @@ void dsp::compute(const hostbuf buffer_ptr)
     addDataToOutput(data1_resampled[stream_num], subtraction_data1[stream_num], stream_num);
     
     // Preprocessing Data 2
-    applyDownConversionCalibration(data2[stream_num], streams[stream_num]);
+    applyDownConversionCalibration(data2[stream_num], streams[stream_num], 1);
     applyFilter(data2[stream_num], firwin, stream_num);
     downconvert(data2[stream_num], stream_num);
     resample(data2[stream_num], data2_resampled[stream_num], streams[stream_num]);
@@ -307,7 +307,7 @@ void dsp::compute(const hostbuf buffer_ptr)
 
     // calculateG2(data_for_correlation1[stream_num], data_for_correlation2[stream_num], cross_power[stream_num], g2_out_filtered[stream_num],
     //             streams[stream_num], cublas_handles[stream_num]);
-    calculateG2(data1_resampled[stream_num], data2_resampled[stream_num], cross_power[stream_num], g2_out[stream_num],
+    calculateG2gemm(data1_resampled[stream_num], data2_resampled[stream_num], cross_power[stream_num], g2_out[stream_num],
                 streams[stream_num], cublas_handles[stream_num]);
 }
 
@@ -429,7 +429,7 @@ void dsp::calculateG1(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublas
     // Compute correlation for the signal and add it to the output
     auto cublas_status = cublasCsyrkx(handle,
                                      CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, resampled_trace_length, batch_size,
-                                     &alpha, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data1.data())), resampled_trace_length,
+                                                                          &alpha, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data1.data())), resampled_trace_length,
                                      reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data2.data())), resampled_trace_length,
                                      &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), resampled_trace_length);
     // Check for errors
@@ -442,7 +442,6 @@ void dsp::calculateG1(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublas
 // For this use dsp::makeFilterWindow and dsp::applyFilter before calling this method.
 void dsp::calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle)
 {
-    // gpuvec_c crossPower(total_length, tcf(0)); // contains cross-channel power of signal
     thrust::transform(thrust::cuda::par_nosync.on(stream),
                       data_1.begin(), data_1.end(), data_2.begin(), cross_power.begin(), cross_power_functor());
     // Calculating G2 as two-time cross power correlation
@@ -502,13 +501,18 @@ hostvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
     return result;
 }
 
-std::vector<hostvec_c> dsp::getG1Results()
+std::tuple<hostvec_c, hostvec_c, hostvec_c> dsp::getG1Results()
 {
-    std::vector<hostvec_c> vec;
-    vec.push_back(getCumulativeTrace(g1_left_out));
-    vec.push_back(getCumulativeTrace(g1_right_out));
-    vec.push_back(getCumulativeTrace(g1_cross_out));
-    return vec;
+    hostvec_c left = getCumulativeTrace(g1_left_out);
+    hostvec_c right = getCumulativeTrace(g1_right_out);
+    hostvec_c cross = getCumulativeTrace(g1_cross_out);
+
+    return std::make_tuple(left, right, cross);
+}
+
+hostvec_c dsp::getG1CrossResults()
+{
+    return getCumulativeTrace(g1_cross_out);
 }
 
 hostvec_c dsp::getG2FullResults()

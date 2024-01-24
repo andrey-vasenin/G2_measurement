@@ -23,13 +23,13 @@ int main()
             dig->setupChannels(channels, amps, 4);
 
             dig->setSamplingRate(1250000000 / 4);
-            // dig->setExt0TriggerOnPositiveEdge(1000);
+            dig->setExt0TriggerOnPositiveEdge(1000);
             // dig->setupMultRecFifoMode(800, 32, 0);
-            dig->autoTrigger();
+            // dig->autoTrigger();
             dig->setupSingleRecFifoMode(32);
             dig->setSegmentSize(800);
         }
-        auto mes = std::make_unique<Measurement>(dig, 1 << 26, 1 << 10, part, second_oversampling, "yok1");
+        auto mes = std::make_unique<Measurement>(dig, 1 << 24, 1 << 10, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
         mes->setCalibration(1, 0, 0, 0);
@@ -39,7 +39,7 @@ int main()
         // float firwin_r[2] = {1, 99};
         // mes->setCorrelationFirwin(firwin_l, firwin_l);
         auto t1 = high_resolution_clock::now();
-        mes->measure();
+        mes->measureWithCoil();
         auto t2 = high_resolution_clock::now();
         auto dur = duration_cast<milliseconds>(t2 - t1);
         std::cout << "Measurement duration: " << dur.count() << "ms\n";
