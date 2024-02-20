@@ -88,9 +88,9 @@ public:
 
     void setTestInput(const std::vector<int8_t> &input);
 
-    std::tuple<corr_t, corr_t, corr_t> getG1Correlators();
+    corr_t getG1Correlator();
   
-    std::tuple<corr_t, corr_t, corr_t, corr_t> getAllCorrelators();
+    corr_t getG2Correlator();
 
     std::vector<stdvec_c> getSubtractionData();
 

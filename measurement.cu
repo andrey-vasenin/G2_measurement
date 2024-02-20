@@ -233,65 +233,48 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
     test_input = tile(input, batch_size);
 }
 
-std::tuple<corr_t, corr_t, corr_t> Measurement::getG1Correlators()
+corr_t Measurement::getG1Correlator()
 {
     int side = processor->getResampledTraceLength();
     // std::vector<std::vector<std::complex<double>>>   avg_g2(
     //     side, std::vector<std::complex<double>>(side));
 
-    corr_t avg_gll(side, trace_t(side));
-    corr_t avg_grr(side, trace_t(side));
     corr_t avg_glr(side, trace_t(side));
 
     // Receive data from GPU
-    auto corrs = processor->getG1Results();
+    auto corrs = processor->getG1CrossResult();
     
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int i = 0; i < 3; i++)
-    {
     for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = t1; t2 < side; t2++)
-        {
-            avg_gll[t1][t2] = std::complex<float>(std::get<0>(corrs)[t1 * side + t2] / X);
-            avg_gll[t2][t1] = std::conj(avg_gll[t1][t2]);
-            avg_grr[t1][t2] = std::complex<float>(std::get<1>(corrs)[t1 * side + t2] / X);
-            avg_grr[t2][t1] = std::conj(avg_grr[t1][t2]);
-            avg_glr[t1][t2] = std::complex<float>(std::get<2>(corrs)[t1 * side + t2] / X);
-            avg_glr[t2][t1] = avg_glr[t1][t2];
-        }
-    }    
-    return std::make_tuple(avg_gll, avg_grr, avg_glr);
+        for (int t2 = 0; t2 < side; t2++)
+            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
+
+    return avg_glr;
 }
 
-std::tuple<corr_t, corr_t, corr_t, corr_t> Measurement::getAllCorrelators()
+corr_t Measurement::getG2Correlator()
 {
     int side = processor->getResampledTraceLength();
     corr_t avg_g2(side, trace_t(side));
 
     // Receive data from GPU
-    auto result = processor->getG2FullResults();
+    auto result = processor->getG2FullResult();
 
     // Divide the data by a number of traces measured
-    auto g1 = getG1Correlators();
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
     for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = t1; t2 < side; t2++)
-        {
+        for (int t2 = 0; t2 < side; t2++)
             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-            // avg_g2[t1][t2] =  avg_g2[t1][t2] - std::conj(std::get<0>(g1)[t2][t1]) * std::get<1>(g1)[t1][t2] + std::abs(std::get<2>(g1)[t1][t2]) * std::abs(std::get<2>(g1)[t1][t2]); 
-            //  avg_g2[t2][t1] = std::conj  avg_g2[t1][t2]);
-            avg_g2[t2][t1] =  avg_g2[t1][t2];
-        }
     
-    return std::make_tuple(std::get<0>(g1), std::get<1>(g1), std::get<2>(g1), avg_g2);
+    return avg_g2;
 }
 
 stdvec_c Measurement::getRawG2()
 {
     // Receive data from GPU
-    auto result = processor->getG2FullResults();
+    auto result = processor->getG2FullResult();
 
     return stdvec_c(result.begin(), result.end());
 }
