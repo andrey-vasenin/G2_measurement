@@ -29,10 +29,11 @@ int main()
             dig->setupSingleRecFifoMode(32);
             dig->setSegmentSize(800);
         }
-        auto mes = std::make_unique<Measurement>(dig, 1 << 24, 1 << 10, part, second_oversampling, "yok1");
+        auto mes = std::make_unique<Measurement>(dig, 1 << 22, 1 << 11, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
-        mes->setCalibration(1, 0, 0, 0);
+        mes->setCalibration(0, 1, 0, 0, 0);
+        mes->setCalibration(1, 1, 0, 0, 0);
         mes->setAmplitude(100);
         mes->setCurrents(-0.5435e-3f, -2.5e-3f);
         // float firwin_l[2] = {1, 99};
@@ -49,7 +50,7 @@ int main()
         tcf a = st[0][0];
         tcf b = sd[0][0];
         std::cout << a << ' ' << b << std::endl;
-        auto g2 = mes->getG2Correlator("g2_full");
+        auto g2 = mes->getG2Correlator();
         std::cout << g2[0][0] << std::endl;
 
     }
