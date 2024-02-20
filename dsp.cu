@@ -119,8 +119,8 @@ dsp::dsp(size_t len, uint64_t n, double part,
         // data_for_correlation2[i].resize(total_length, tcf(0.f));
 
         g1_cross_out[i].resize(out_size * batch_size, tcf(0.f));
-        g1_left_out[i].resize(out_size * batch_size, tcf(0.f));
-        g1_right_out[i].resize(out_size * batch_size, tcf(0.f));
+        // g1_left_out[i].resize(out_size * batch_size, tcf(0.f));
+        // g1_right_out[i].resize(out_size * batch_size, tcf(0.f));
         g2_out[i].resize(out_size * batch_size, tcf(0.f));
         // g2_out_filtered[i].resize(out_size * batch_size, tcf(0.f));
         cross_power[i].resize(resampled_total_length, tcf(0.f));
@@ -260,8 +260,8 @@ void dsp::resetOutput()
         thrust::fill(subtraction_data1[i].begin(), subtraction_data1[i].end(), tcf(0));
         thrust::fill(subtraction_data2[i].begin(), subtraction_data2[i].end(), tcf(0));
         thrust::fill(g1_cross_out[i].begin(), g1_cross_out[i].end(), tcf(0));
-        thrust::fill(g1_left_out[i].begin(), g1_left_out[i].end(), tcf(0));
-        thrust::fill(g1_right_out[i].begin(), g1_right_out[i].end(), tcf(0));
+        // thrust::fill(g1_left_out[i].begin(), g1_left_out[i].end(), tcf(0));
+        // thrust::fill(g1_right_out[i].begin(), g1_right_out[i].end(), tcf(0));
         thrust::fill(g2_out[i].begin(), g2_out[i].end(), tcf(0));
         // thrust::fill(g2_out_filtered[i].begin(), g2_out[i].end(), tcf(0));
         // thrust::fill(data_for_correlation1[i].begin(), data_for_correlation1[i].begin(), tcf(0));
@@ -294,9 +294,9 @@ void dsp::compute(const hostbuf buffer_ptr)
     subtractDataFromOutput(subtraction_trace2, data2_resampled[stream_num], stream_num);
     addDataToOutput(data2_resampled[stream_num], subtraction_data2[stream_num], stream_num);
     
-    calculateG1(data2_resampled[stream_num], data1_resampled[stream_num], g1_cross_out[stream_num], cublas_handles[stream_num]);
-    calculateG1(data1_resampled[stream_num], data1_resampled[stream_num], g1_left_out[stream_num], cublas_handles[stream_num]);
-    calculateG1(data2_resampled[stream_num], data2_resampled[stream_num], g1_right_out[stream_num], cublas_handles[stream_num]);
+    calculateG1gemm(data2_resampled[stream_num], data1_resampled[stream_num], g1_cross_out[stream_num], cublas_handles[stream_num]);
+    // calculateG1(data1_resampled[stream_num], data1_resampled[stream_num], g1_left_out[stream_num], cublas_handles[stream_num]);
+    // calculateG1(data2_resampled[stream_num], data2_resampled[stream_num], g1_right_out[stream_num], cublas_handles[stream_num]);
 
     // data_for_correlation1[stream_num] = data1[stream_num];
     // applyFilter(data_for_correlation1[stream_num], corr_firwin1, stream_num);
@@ -437,6 +437,21 @@ void dsp::calculateG1(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublas
         "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
 }
 
+void dsp::calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle)
+{
+    using namespace std::string_literals;
+
+    // Compute correlation for the signal and add it to the output
+    auto cublas_status = cublasCgemm3m(handle,
+                                     CUBLAS_OP_N, CUBLAS_OP_C, resampled_trace_length, resampled_trace_length, batch_size,
+                                     &alpha, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data1.data())), resampled_trace_length,
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(data2.data())), resampled_trace_length,
+                                     &beta, reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), resampled_trace_length);
+    // Check for errors
+    check_cublas_error(cublas_status,
+        "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
+}
+
 // Calculate second-order correlation function.
 // Could be used for calculating correlations between filtered signals.
 // For this use dsp::makeFilterWindow and dsp::applyFilter before calling this method.
@@ -448,6 +463,24 @@ void dsp::calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power,
     auto cublas_status = cublasCsyrk(handle,
                                      CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, resampled_trace_length, batch_size,
                                      &alpha,
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(cross_power.data())), resampled_trace_length,
+                                     &beta,
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), resampled_trace_length);
+    // Check for errors
+    using namespace std::string_literals;
+    check_cublas_error(cublas_status,
+                       "Error of rank-2 update (data) with code #"s + std::to_string(cublas_status));
+}
+
+void dsp::calculateG2gemm(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle)
+{
+    thrust::transform(thrust::cuda::par_nosync.on(stream),
+                      data_1.begin(), data_1.end(), data_2.begin(), cross_power.begin(), cross_power_functor());
+    // Calculating G2 as two-time cross power correlation
+    auto cublas_status = cublasCgemm3m(handle,
+                                     CUBLAS_OP_N, CUBLAS_OP_T, resampled_trace_length, resampled_trace_length, batch_size,
+                                     &alpha,
+                                     reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(cross_power.data())), resampled_trace_length,
                                      reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(cross_power.data())), resampled_trace_length,
                                      &beta,
                                      reinterpret_cast<cuComplex *>(thrust::raw_pointer_cast(output.data())), resampled_trace_length);
@@ -501,21 +534,12 @@ hostvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
     return result;
 }
 
-std::tuple<hostvec_c, hostvec_c, hostvec_c> dsp::getG1Results()
-{
-    hostvec_c left = getCumulativeTrace(g1_left_out);
-    hostvec_c right = getCumulativeTrace(g1_right_out);
-    hostvec_c cross = getCumulativeTrace(g1_cross_out);
-
-    return std::make_tuple(left, right, cross);
-}
-
-hostvec_c dsp::getG1CrossResults()
+hostvec_c dsp::getG1CrossResult()
 {
     return getCumulativeTrace(g1_cross_out);
 }
 
-hostvec_c dsp::getG2FullResults()
+hostvec_c dsp::getG2FullResult()
 {
     // return getCumulativeCorrelator(g2_out);
     return getCumulativeTrace(g2_out);

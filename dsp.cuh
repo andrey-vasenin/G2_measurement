@@ -155,9 +155,9 @@ public:
 
     std::tuple<hostvec_c, hostvec_c, hostvec_c> getG1Results();
 
-    hostvec_c getG1CrossResults();
+    hostvec_c getG1CrossResult();
 
-    hostvec_c getG2FullResults();
+    hostvec_c getG2FullResult();
 
     hostvec_c getG2FilteredResults();
 
