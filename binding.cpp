@@ -19,7 +19,7 @@ PYBIND11_MODULE(g2_measurement, m)
 {
     py::class_<Measurement>(m, "G2Measurer", py::module_local())
         .def(py::init<std::uintptr_t, unsigned long long, unsigned long long, double, int, const char *>(), output_and_gil_guard())
-        // .def(py::init<unsigned long long, int, long, int>(), output_and_gil_guard()) // for test inputs with out digitizer
+        // .def(py::init<unsigned long long, unsigned long long, long, float, int>(), output_and_gil_guard()) // for test inputs with out digitizer
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
         .def("set_correlation_firwin", &Measurement::setCorrelationFirwin, output_and_gil_guard())
@@ -27,6 +27,9 @@ PYBIND11_MODULE(g2_measurement, m)
         .def("measure_with_coil", &Measurement::measureWithCoil, output_and_gil_guard())
         .def("get_g1_correlator", &Measurement::getG1Correlator, output_and_gil_guard())
         .def("get_g2_correlator", &Measurement::getG2Correlator, output_and_gil_guard())
+        .def("get_g2_cross_segment_correlator", &Measurement::getG2CrossSegmentCorrelator, output_and_gil_guard())
+        .def("get_g2_filtered_correlator", &Measurement::getG2FilteredCorrelator, output_and_gil_guard())
+        .def("get_g2_filtered_cross_segment_correlator", &Measurement::getG2FilteredCrossSegmentCorrelator, output_and_gil_guard())
         .def("get_raw_g2", &Measurement::getRawG2, output_and_gil_guard())
         .def("reset", &Measurement::reset, output_and_gil_guard())
         .def("reset_output", &Measurement::resetOutput, output_and_gil_guard())

@@ -10,7 +10,7 @@ int main()
     using std::chrono::duration;
     using std::chrono::duration_cast;
     using std::chrono::high_resolution_clock;
-    using std::chrono::milliseconds;
+    using std::chrono::microseconds;
 
     double part = 1;
     int second_oversampling = 2;
@@ -29,29 +29,41 @@ int main()
             dig->setupSingleRecFifoMode(32);
             dig->setSegmentSize(800);
         }
-        auto mes = std::make_unique<Measurement>(dig, 1 << 22, 1 << 11, part, second_oversampling, "yok1");
+        auto avg = 1 << 22;
+        auto batch_size = 1 << 11;
+        auto num_iter = int(avg / batch_size);
+        auto mes = std::make_unique<Measurement>(dig, avg, batch_size, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
         mes->setCalibration(0, 1, 0, 0, 0);
         mes->setCalibration(1, 1, 0, 0, 0);
         mes->setAmplitude(100);
-        mes->setCurrents(-0.5435e-3f, -2.5e-3f);
-        // float firwin_l[2] = {1, 99};
-        // float firwin_r[2] = {1, 99};
-        // mes->setCorrelationFirwin(firwin_l, firwin_l);
+        mes->setCurrents(0, 0);
+        std::pair<float, float> firwin_l (1, 99);
+        std::pair<float, float> firwin_r (1, 99);
+        mes->setCorrelationFirwin(firwin_l, firwin_r);
         auto t1 = high_resolution_clock::now();
         mes->measureWithCoil();
         auto t2 = high_resolution_clock::now();
-        auto dur = duration_cast<milliseconds>(t2 - t1);
-        std::cout << "Measurement duration: " << dur.count() << "ms\n";
-        auto sd = mes->getSubtractionData();
-        mes->setSubtractionTrace(sd);
-        auto st = mes->getSubtractionTrace();
-        tcf a = st[0][0];
-        tcf b = sd[0][0];
-        std::cout << a << ' ' << b << std::endl;
+        auto dur = duration_cast<microseconds>(t2 - t1);
+        std::cout << "Measurement duration: " << dur.count() << " mcs\n";
+        auto one_iter_dur = dur / num_iter;
+        std::cout << "One iteration duration: " << one_iter_dur.count() << " mcs\n";
+        // auto sd = mes->getSubtractionData();
+        // mes->setSubtractionTrace(sd);
+        // auto st = mes->getSubtractionTrace();
+        // tcf a = st[0][0];
+        // tcf b = sd[0][0];
+        // std::cout << a << ' ' << b << std::endl;
         auto g2 = mes->getG2Correlator();
+        auto g2_cross = mes->getG2CrossSegmentCorrelator();
+        auto g2_filt = mes->getG2FilteredCorrelator();
+        auto g2_filt_cross = mes->getG2FilteredCrossSegmentCorrelator();
+
         std::cout << g2[0][0] << std::endl;
+        std::cout << g2_cross[0][0] << std::endl;
+        std::cout << g2_filt[0][0] << std::endl;
+        std::cout << g2_filt_cross[0][0] << std::endl;
 
     }
     catch (const std::runtime_error& e) {

@@ -92,6 +92,12 @@ public:
   
     corr_t getG2Correlator();
 
+    corr_t getG2CrossSegmentCorrelator();
+
+    corr_t getG2FilteredCorrelator();
+
+    corr_t getG2FilteredCrossSegmentCorrelator();
+
     std::vector<stdvec_c> getSubtractionData();
 
     stdvec_c getRawG2();

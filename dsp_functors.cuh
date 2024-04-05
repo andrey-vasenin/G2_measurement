@@ -55,6 +55,14 @@ struct power_functor
     }
 };
 
+struct corr_functor
+{
+    __device__ inline void operator()(const tcf &x, const tcf &y, tcf &z)
+    {
+        z += x * y;
+    }
+};
+
 struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, tcf>
 {   
 

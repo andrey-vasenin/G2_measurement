@@ -70,8 +70,11 @@ class dsp
     gpuvec_c g1_left_out[num_streams];
     gpuvec_c g1_right_out[num_streams];
     gpuvec_c g2_out[num_streams];
+    gpuvec_c g2_out_cross_segment[num_streams];
     gpuvec_c g2_out_filtered[num_streams];
+    gpuvec_c g2_out_filtered_cross_segment[num_streams];
     gpuvec_c cross_power[num_streams];
+    gpuvec_c cross_power_short[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
@@ -139,9 +142,9 @@ public:
         return resampled_total_length;
     }
 
-    void setFirwin(float cutoff_l, float cutoff_r, int oversampling = 1);
+    void setFirwin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
 
-    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int oversampling = 1);
+    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int dig_oversampling = 1);
 
     void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, int oversampling = 1);
 
@@ -159,7 +162,11 @@ public:
 
     hostvec_c getG2FullResult();
 
-    hostvec_c getG2FilteredResults();
+    hostvec_c getG2CrossSegmentResult();
+
+    hostvec_c getG2FilteredResult();
+
+    hostvec_c getG2FilteredCrossSegmentResult();
 
     void setDownConversionCalibrationParameters(int channel_num, float r, float phi, float offset_i, float offset_q);
 
@@ -179,9 +186,11 @@ public:
 
     void setAmplitude(int ampl);
 
+    void adjustDiagonal(gpuvec_c &matrix, int N, tcf new_value, const cudaStream_t &stream);
+
 protected:
     template <typename T>
-    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces);
+    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces, const T divisor);
 
     void handleError(cudaError_t error);
 
@@ -213,6 +222,9 @@ protected:
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 
     void calculateG2gemm(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
+
+    void calculateG2New(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &cross_power_short, gpuvec_c &output_one_segment, 
+                        gpuvec_c &output_cross_segment,const cudaStream_t &stream, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH
