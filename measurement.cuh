@@ -9,39 +9,44 @@
 #include <cstdint>
 #include "digitizer.h"
 #include "dsp.cuh"
+#include "pinned_allocator.cuh"
 #include <pybind11/pybind11.h>
 #include "yokogawa_gs210.h"
 
 namespace py = pybind11;
+typedef std::vector<int8_t, PinnedAllocator<int8_t>> hostbuf;
 
-
-class Measurement {
+class Measurement
+{
 private:
-    Digitizer* dig;
-    yokogawa_gs210* coil;
-    dsp* processor;
+    Digitizer *dig;
+    yokogawa_gs210 *coil;
+    dsp *processor;
     size_t segment_size;
     uint64_t segments_count;
     uint64_t batch_size;
     size_t notify_size;
     uint64_t iters_num;
     uint64_t iters_done;
-    uint64_t sampling_rate;
+    double sampling_rate;
+    hostbuf buffer;
 
     float offset_current = 0.f;
     float working_current = 0.f;
 
     float max = 0.f;
 
-    std::vector<int8_t> test_input;
+    thrust::host_vector<int8_t> test_input;
 
     proc_t func;
     proc_t func_ult_calib;
 
 public:
-    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address);
+    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
+                int second_oversampling, int K, const char *coil_address);
 
-    Measurement(Digitizer *dig, uint64_t averages, uint64_t batch, double part, int K, const char* coil_address);
+    Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+                int second_oversampling, int K, const char *coil_address);
 
     void setAmplitude(int ampl);
 
@@ -60,9 +65,11 @@ public:
     void setCalibration(float r, float phi, float offset_i, float offset_q);
 
     void setFirwin(float left_cutoff, float right_cutoff);
-    
+
+    void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2]);
+
     void setTapers(std::vector<stdvec> tapers);
-    
+
     void setIntermediateFrequency(float frequency);
 
     void measure();
@@ -73,7 +80,7 @@ public:
 
     void measureTest();
 
-    void setTestInput(py::buffer input);
+    void setTestInput(const std::vector<int8_t> &input);
 
     stdvec_c getMeanField();
 
@@ -84,16 +91,18 @@ public:
     stdvec_c getDataSpectrum();
 
     stdvec_c getNoiseSpectrum();
-    
-    stdvec getPeriodogram();
 
-    std::vector <std::vector<std::complex<double>>> getCorrelator();
+    stdvec getPeriodogram();
+  
+    std::vector<std::vector<std::complex<double>>> getCorrelator(string request);
 
     stdvec_c getSubtractionData();
 
     stdvec_c getSubtractionNoise();
-    
-    stdvec_c getRawCorrelator();
+
+    stdvec_c getRawG1();
+
+    stdvec_c getRawG2();
 
     void setSubtractionTrace(stdvec_c trace, stdvec_c offsets);
 
@@ -112,11 +121,11 @@ public:
 protected:
     void initializeBuffer();
 
-    stdvec postprocess(hostvec& data);
-    stdvec_c postprocess(hostvec_c& data);
+    template <typename T, typename V>
+    std::vector<V> postprocess(const thrust::host_vector<T> &data);
 
     template <template <typename, typename...> class Container, typename T, typename... Args>
-    thrust::host_vector<T> tile(const Container<T, Args...>& data, size_t N);
+    thrust::host_vector<T> tile(const Container<T, Args...> &data, size_t N);
 };
 
-#endif //SPECTRUMEXTENSION_MEASUREMENT_H
+#endif // SPECTRUMEXTENSION_MEASUREMENT_H
