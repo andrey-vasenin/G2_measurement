@@ -8,36 +8,43 @@
 #include <pybind11/iostream.h>
 #include "measurement.cuh"
 
-#define OUTPUTON py::call_guard<py::scoped_ostream_redirect, py::scoped_estream_redirect, py::gil_scoped_release>()
+namespace py = pybind11;
+using output_and_gil_guard = py::call_guard<py::scoped_ostream_redirect,
+                                            py::scoped_estream_redirect,
+                                            py::gil_scoped_release>;
 
 using namespace pybind11::literals;
 
-namespace py = pybind11;
-
-PYBIND11_MODULE(g2measurement, m) {
+PYBIND11_MODULE(g2_measurement, m)
+{
     py::class_<Measurement>(m, "G2Measurer", py::module_local())
-        .def(py::init<std::uintptr_t, unsigned long long, int, float>(), OUTPUTON)
-        .def("set_calibration", &Measurement::setCalibration, OUTPUTON)
-        .def("set_firwin", &Measurement::setFirwin, OUTPUTON)
-        .def("measure", &Measurement::measure, OUTPUTON)
-        .def("get_mean_field", &Measurement::getMeanField, OUTPUTON)
-        .def("get_mean_power", &Measurement::getMeanPower, OUTPUTON)
-        .def("get_correlator", &Measurement::getCorrelator, OUTPUTON)
-        .def("get_spectrum", &Measurement::getMeanSpectrum, OUTPUTON)
-        .def("get_raw_correlator", &Measurement::getRawCorrelator, OUTPUTON)
-        .def("reset", &Measurement::reset, OUTPUTON)
-        .def("reset_output", &Measurement::resetOutput, OUTPUTON)
-        .def("get_counter", &Measurement::getCounter, OUTPUTON)
-        .def("free", &Measurement::free, OUTPUTON)
-        .def("measure_test", &Measurement::measureTest, OUTPUTON)
-        .def("set_test_input", &Measurement::setTestInput, OUTPUTON)
-        .def("set_subtraction_trace", &Measurement::setSubtractionTrace, OUTPUTON)
-        .def("get_subtraction_trace", &Measurement::getSubtractionTrace, OUTPUTON)
-        .def("set_amplitude", &Measurement::setAmplitude, OUTPUTON)
-        .def("set_intermediate_frequency", &Measurement::setIntermediateFrequency, OUTPUTON)
-        .def("set_averages_number", &Measurement::setAveragesNumber, OUTPUTON)
-        .def("get_total_length", &Measurement::getTotalLength, OUTPUTON)
-        .def("get_trace_length", &Measurement::getTraceLength, OUTPUTON)
-        .def("get_out_size", &Measurement::getOutSize, OUTPUTON)
-        .def("get_notify_size", &Measurement::getNotifySize, OUTPUTON);
+        .def(py::init<std::uintptr_t, unsigned long long, unsigned long long, double, int, const char *>(), output_and_gil_guard())
+        // .def(py::init<unsigned long long, unsigned long long, long, float, int>(), output_and_gil_guard()) // for test inputs with out digitizer
+        .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
+        .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
+        .def("set_correlation_firwin", &Measurement::setCorrelationFirwin, output_and_gil_guard())
+        .def("measure", &Measurement::measure, output_and_gil_guard())
+        .def("measure_with_coil", &Measurement::measureWithCoil, output_and_gil_guard())
+        .def("get_g1_correlator", &Measurement::getG1Correlator, output_and_gil_guard())
+        .def("get_g2_correlator", &Measurement::getG2Correlator, output_and_gil_guard())
+        .def("get_g2_cross_segment_correlator", &Measurement::getG2CrossSegmentCorrelator, output_and_gil_guard())
+        .def("get_g2_filtered_correlator", &Measurement::getG2FilteredCorrelator, output_and_gil_guard())
+        .def("get_g2_filtered_cross_segment_correlator", &Measurement::getG2FilteredCrossSegmentCorrelator, output_and_gil_guard())
+        .def("get_raw_g2", &Measurement::getRawG2, output_and_gil_guard())
+        .def("reset", &Measurement::reset, output_and_gil_guard())
+        .def("reset_output", &Measurement::resetOutput, output_and_gil_guard())
+        .def("free", &Measurement::free, output_and_gil_guard())
+        .def("measure_test", &Measurement::measureTest, output_and_gil_guard())
+        .def("set_test_input", &Measurement::setTestInput, output_and_gil_guard())
+        .def("set_subtraction_trace", &Measurement::setSubtractionTrace, output_and_gil_guard())
+        .def("get_subtraction_trace", &Measurement::getSubtractionTrace, output_and_gil_guard())
+        .def("get_subtraction_data", &Measurement::getSubtractionData, output_and_gil_guard())
+        .def("set_amplitude", &Measurement::setAmplitude, output_and_gil_guard())
+        .def("set_currents", &Measurement::setCurrents, output_and_gil_guard())
+        .def("set_intermediate_frequency", &Measurement::setIntermediateFrequency, output_and_gil_guard())
+        .def("set_averages_number", &Measurement::setAveragesNumber, output_and_gil_guard())
+        .def("get_total_length", &Measurement::getTotalLength, output_and_gil_guard())
+        .def("get_trace_length", &Measurement::getTraceLength, output_and_gil_guard())
+        .def("get_out_size", &Measurement::getOutSize, output_and_gil_guard())
+        .def("get_notify_size", &Measurement::getNotifySize, output_and_gil_guard());
 }
