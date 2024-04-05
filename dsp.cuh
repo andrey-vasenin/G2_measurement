@@ -6,6 +6,7 @@
 #define CPPMEASUREMENT_DSP_CUH
 
 #include <nppdefs.h>
+#include <cuComplex.h>
 #include <vector>
 #include <complex>
 #include <cufft.h>
@@ -16,19 +17,18 @@
 #include <thrust/mr/allocator.h>
 #include <thrust/system/cuda/memory_resource.h>
 
-const int num_streams = 4;
+const int num_streams = 2;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
+const int num_channels = 2; // number of used digitizer channels
 
 typedef thrust::complex<float> tcf;
 typedef thrust::device_vector<float> gpuvec;
 typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
-typedef thrust::device_vector<char> gpubuf;
-typedef thrust::host_vector<int8_t, thrust::mr::stateless_resource_allocator<int8_t,
-    thrust::system::cuda::universal_host_pinned_memory_resource> > hostbuf;
-typedef hostbuf::iterator hostbuf_iter_t;
+typedef thrust::device_vector<char4> gpubuf;
+typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
 
@@ -39,15 +39,15 @@ inline T *get(thrust::device_vector<T> vec)
 }
 
 template <typename T>
-inline Npp32fc* to_Npp32fc_p(T* v)
+inline Npp32fc *to_Npp32fc_p(T *v)
 {
-    return reinterpret_cast<Npp32fc*>(v);
+    return reinterpret_cast<Npp32fc *>(v);
 }
 
 template <typename T>
-inline Npp32f* to_Npp32f_p(T* v)
+inline Npp32f *to_Npp32f_p(T *v)
 {
-    return reinterpret_cast<Npp32f*>(v);
+    return reinterpret_cast<Npp32f *>(v);
 }
 
 class dsp
@@ -56,25 +56,34 @@ class dsp
     hostbuf buffer;
 
     /* Pointers to arrays with data */
-    gpubuf gpu_buf[num_streams];  // buffers for loading data
-    gpubuf gpu_buf2[num_streams]; // buffers for loading data
-    gpuvec_c data[num_streams];
-    gpuvec_c data_calibrated[num_streams];
-    gpuvec_c noise[num_streams];
-    gpuvec_c noise_calibrated[num_streams];
+    gpubuf gpu_data_buf[num_streams];  // buffers for loading data
+    gpuvec_c data1[num_streams];
+    gpuvec_c data2[num_streams];
+    gpuvec_c data1_resampled[num_streams];
+    gpuvec_c data2_resampled[num_streams];
+    gpuvec_c subtraction_data1[num_streams];
+    gpuvec_c subtraction_data2[num_streams];
+    gpuvec_c data_for_correlation1[num_streams];
+    gpuvec_c data_for_correlation2[num_streams];
 
-    gpuvec power[num_streams];   // arrays for storage of average power
-    gpuvec_c field[num_streams]; // arrays for storage of average field
-    gpuvec_c out[num_streams];
-    gpuvec spectrum[num_streams];
+    gpuvec_c g1_cross_out[num_streams];
+    gpuvec_c g1_left_out[num_streams];
+    gpuvec_c g1_right_out[num_streams];
+    gpuvec_c g2_out[num_streams];
+    gpuvec_c g2_out_cross_segment[num_streams];
+    gpuvec_c g2_out_filtered[num_streams];
+    gpuvec_c g2_out_filtered_cross_segment[num_streams];
+    gpuvec_c cross_power[num_streams];
+    gpuvec_c cross_power_short[num_streams];
 
-    uint32_t cnt = 0;
-
-    /* Filtering window */
+    /* Filtering windows */
     gpuvec_c firwin;
+    gpuvec_c corr_firwin1;
+    gpuvec_c corr_firwin2;
 
-    /* Subtraction trace */
-    gpuvec_c subtraction_trace;
+    /* Subtraction traces */
+    gpuvec_c subtraction_trace1;
+    gpuvec_c subtraction_trace2;
 
     /* Downconversion coefficients */
     gpuvec_c downconversion_coeffs;
@@ -82,35 +91,38 @@ class dsp
 private:
     /* Useful variables */
     size_t trace_length; // for keeping the length of a trace
+    int oversampling;    // determines oversampling after digital filtering
+    size_t resampled_trace_length;
     size_t trace1_start, trace2_start, pitch;
+    size_t inter_buffer_size;
     size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
     size_t total_length; // batch_size * trace_length
+    size_t resampled_total_length;
     size_t out_size;
-    int semaphore = 0;                           // for selecting the current stream
-    float scale = 500.f / 128.f; // for conversion into mV
+    int semaphore = 0;           // for selecting the current stream
+    float scale = 500.f / 128.f; // for conversion into mV // max int8 is 127
+
+    const cuComplex alpha = make_cuComplex(1, 0);
+    const cuComplex beta = make_cuComplex(1, 0);
+    const float beta_float = 1.0;
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
-    NppStreamContext streamContexts[num_streams];
 
     /* cuFFT required variables */
     cufftHandle plans[num_streams];
 
     /* cuBLAS required variables */
     cublasHandle_t cublas_handles[num_streams];
-    cublasHandle_t cublas_handles2[num_streams];
+
+    /* NVIDIA Performance Primitives required variables */
+    NppStreamContext streamContexts[num_streams];
 
     /* Down-conversion calibration variables */
-    gpuvec A_gpu;
-    gpuvec_c C_gpu;
-    int batch_count;
-    float alpha = 1.f;
-    float beta = 0.f;
-
-    float a_ii, a_qi, a_qq, c_i, c_q;
+    float a_qi[num_channels], a_qq[num_channels], c_i[num_channels], c_q[num_channels];
 
 public:
-    dsp(size_t len, uint64_t n, double part);
+    dsp(size_t len, uint64_t n, double part, double samplerate, int second_oversampling);
 
     ~dsp();
 
@@ -120,65 +132,99 @@ public:
 
     int getOutSize();
 
-    void setFirwin(float cutoff_l, float cutoff_r, int oversampling = 1);
+    int getResampledTraceLength()
+    {
+        return resampled_trace_length;
+    };
+
+    int getResampledTotalLength()
+    {
+        return resampled_total_length;
+    }
+
+    void setFirwin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
+
+    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int dig_oversampling = 1);
+
+    void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, int oversampling = 1);
 
     void resetOutput();
 
-    uint32_t getCounter() { return cnt; }
+    void compute(const hostbuf buffer_ptr);
 
-    void compute(const int8_t* buffer_ptr);
+    std::vector<hostvec_c> getCumulativeSubtrData();
+  
+    hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
-    void getCumulativePower(hostvec &result);
+    std::tuple<hostvec_c, hostvec_c, hostvec_c> getG1Results();
 
-    void getCumulativeSpectrum(hostvec& result);
+    hostvec_c getG1CrossResult();
 
-    void getCumulativeField(hostvec_c &result);
+    hostvec_c getG2FullResult();
 
-    void getCorrelator(hostvec_c &result);
+    hostvec_c getG2CrossSegmentResult();
 
-    void setDownConversionCalibrationParameters(float r, float phi, float offset_i, float offset_q);
+    hostvec_c getG2FilteredResult();
 
-    void setSubtractionTrace(hostvec_c &trace);
+    hostvec_c getG2FilteredCrossSegmentResult();
 
-    void getSubtractionTrace(hostvec_c &trace);
+    void setDownConversionCalibrationParameters(int channel_num, float r, float phi, float offset_i, float offset_q);
+
+    void setSubtractionTrace(hostvec_c trace[num_channels]);
+
+    void getSubtractionTrace(std::vector<stdvec_c> &trace);
 
     void resetSubtractionTrace();
 
     void createBuffer(size_t size);
 
-    void setIntermediateFrequency(float frequency, int oversampling);
+    void deleteBuffer();
 
-    int8_t* getBuffer();
+    hostbuf getBuffer();
+
+    void setIntermediateFrequency(float frequency, int oversampling);
 
     void setAmplitude(int ampl);
 
+    void adjustDiagonal(gpuvec_c &matrix, int N, tcf new_value, const cudaStream_t &stream);
+
 protected:
+    template <typename T>
+    thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces, const T divisor);
+
     void handleError(cudaError_t error);
 
     void switchStream() { semaphore = (semaphore < (num_streams - 1)) ? semaphore + 1 : 0; };
 
-    void loadDataToGPUwithPitchAndOffset(const int8_t* buffer_ptr,
-        gpubuf & gpu_buf, size_t pitch, size_t offset, int stream_num);
+    void copyDataFromBuffer(const hostbuf buffer_ptr, 
+                                        gpubuf &dst, int stream_num);
 
-    void convertDataToMillivolts(gpuvec_c& data, gpubuf& gpu_buf, cudaStream_t& stream);
+    void splitAndConvertDataToMillivolts(gpuvec_c &data_left, gpuvec_c &data_right, const gpubuf &gpu_buf, const cudaStream_t &stream);
 
-    void downconvert(gpuvec_c data, cudaStream_t& stream);
+    void downconvert(gpuvec_c &data, int stream_num);
 
-    void applyDownConversionCalibration(gpuvec_c &data, gpuvec_c &data_calibrated, cudaStream_t& stream);
+    void applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream, int channel_num);
 
-    void addDataToOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t& stream);
+    void addDataToOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
 
-    void subtractDataFromOutput(gpuvec_c& data, gpuvec_c& output, cudaStream_t& stream);
+    void subtractDataFromOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
 
     void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num);
 
-    void calculateField(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cudaStream_t& stream);
+    void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
 
-    void calculatePower(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, cudaStream_t& stream);
+    void normalize(gpuvec_c &data, float coeff, int stream_num);
 
-    void calculateG1(gpuvec_c& data, gpuvec_c& noise, gpuvec_c& output, cublasHandle_t &handle);
+    void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
 
-    void calculateTriplets(gpuvec_c& data, gpuvec_c& noise, gpuvec& output, int stream_num);
+    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle);
+
+    void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
+
+    void calculateG2gemm(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
+
+    void calculateG2New(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &cross_power_short, gpuvec_c &output_one_segment, 
+                        gpuvec_c &output_cross_segment,const cudaStream_t &stream, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

@@ -1,43 +1,47 @@
-#include "dsp.cuh"
-
 #ifndef DSP_FUNCTORS_CUH
 #define DSP_FUNCTORS_CUH
 
-struct calibration_functor : thrust::unary_function<tcf, tcf>
+#include "dsp.cuh"
+
+struct calibration_functor : thrust::unary_function<tcf &, void>
 {
-    float a_qi, a_qq;
-    float c_i, c_q;
+    const float a_qi, a_qq;
+    const float c_i, c_q;
 
     calibration_functor(float _a_qi, float _a_qq,
-        float _c_i, float _c_q) : a_qi{ _a_qi }, a_qq{ _a_qq },
-        c_i{ _c_i }, c_q{ _c_q }
+                        float _c_i, float _c_q) : a_qi{_a_qi}, a_qq{_a_qq},
+                                                  c_i{_c_i}, c_q{_c_q}
     {
     }
 
-    __host__ __device__
-        tcf operator()(tcf x)
+    __device__ inline void operator()(tcf &x)
     {
-        return tcf(x.real() + c_i,
-            a_qi * x.real() + a_qq * x.imag() + c_q);
+        float xr = x.real();
+        float xi = x.imag();
+        x.real(xr + c_i);
+        x.imag(a_qi * xr + a_qq * xi + c_q);
     }
 };
 
-struct millivolts_functor : thrust::binary_function<char, char, tcf>
+
+struct millivolts_functor
 {
-    float scale;
+    const float scale;
 
     millivolts_functor(float s) : scale(s) {}
 
-    __host__ __device__ tcf operator()(char i, char q)
+    __device__ inline void operator()(const char4 &b, tcf &d1, tcf &d2)
     {
-        return tcf(static_cast<float>(i) * scale, static_cast<float>(q) * scale);
+        d1.real(static_cast<float>(b.x) * scale);
+        d1.imag(static_cast<float>(b.y) * scale);
+        d2.real(static_cast<float>(b.z) * scale);
+        d2.imag(static_cast<float>(b.w) * scale);
     }
 };
 
 struct field_functor
 {
-    __host__ __device__
-        void operator()(const tcf& x, const tcf& y, tcf& z)
+    __device__ inline void operator()(const tcf &x, const tcf &y, tcf &z)
     {
         z += x - y;
     }
@@ -45,12 +49,63 @@ struct field_functor
 
 struct power_functor
 {
-    __host__ __device__
-        void operator()(const tcf& x, const tcf& y, float& z)
+    __device__ inline void operator()(const tcf &x, const tcf &y, float &z)
     {
         z += thrust::norm(x) - thrust::norm(y);
     }
 };
 
+struct corr_functor
+{
+    __device__ inline void operator()(const tcf &x, const tcf &y, tcf &z)
+    {
+        z += x * y;
+    }
+};
+
+struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, tcf>
+{   
+
+    __device__ inline tcf operator()(const tcf &x, const tcf &y)
+    {
+        return thrust::conj(x) * y;
+    }
+};
+
+struct downconv_functor : public thrust::binary_function<const tcf &, const tcf &, tcf>
+{
+    __device__ inline
+        tcf
+        operator()(const tcf &x, const tcf &y)
+    {
+        return x * y;
+    }
+};
+
+struct taper_functor : public thrust::binary_function<const tcf &, const float &, tcf>
+{
+    __device__ inline
+        tcf
+        operator()(const tcf &data, const float &taper)
+    {
+        return data * taper;
+    }
+};
+
+struct downsample2_functor
+{
+    __device__ inline tcf operator()(const tcf &s1, const tcf &s2)
+    {
+        return (s1 + s2) / 2.f;
+    }
+};
+
+struct downsample4_functor
+{
+    __device__ inline tcf operator()(const tcf &s1, const tcf &s2, const tcf &s3, const tcf &s4)
+    {
+        return (s1 + s2 + s3 + s4) / 4.f;
+    }
+};
 
 #endif // !DSP_FUNCTORS_CUH
