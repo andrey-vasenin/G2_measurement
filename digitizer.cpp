@@ -129,6 +129,17 @@ void Digitizer::setupMultRecFifoMode(int32 segmentsize, int32 pretrigger, int se
     this->handleError();
 }
 
+void Digitizer::setSegmentSize(int32 segmentsize)
+{
+    spcm_dwSetParam_i32(handle, SPC_SEGMENTSIZE, segmentsize);
+}
+
+void::Digitizer::setupSingleRecFifoMode(int32 pretrigger)
+{
+    spcm_dwSetParam_i32(handle, SPC_CARDMODE, SPC_REC_FIFO_SINGLE);
+    spcm_dwSetParam_i32(handle, SPC_PRETRIGGER, pretrigger);
+}
+
 // Sets the digitizer to trigger on a positive edge at EXT0 port
 void Digitizer::setExt0TriggerOnPositiveEdge(int32 voltageThreshold)
 {
@@ -136,6 +147,11 @@ void Digitizer::setExt0TriggerOnPositiveEdge(int32 voltageThreshold)
     spcm_dwSetParam_i32(handle, SPC_TRIG_EXT0_MODE, SPC_TM_POS);
     spcm_dwSetParam_i32(handle, SPC_TRIG_EXT0_LEVEL0, voltageThreshold);
     this->handleError();
+}
+
+void Digitizer::autoTrigger()
+{
+    spcm_dwSetParam_i32(handle, SPC_TRIG_ORMASK, SPC_TMASK_SOFTWARE);
 }
 
 void Digitizer::setBuffer(int8_t *buf, size_t bufsize)
@@ -165,6 +181,7 @@ size_t Digitizer::getMemsize()
 
 void Digitizer::prepareFifo(uint32 notifysize)
 {
+    // Define the host buffer for the digitizer
     spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
                            &buffer[0], 0, buffersize);
     this->handleError();
@@ -208,13 +225,8 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
             {
             case ERR_FIFOHWOVERRUN:
                 std::cerr << exc.what() << std::endl;
-#ifdef _DEBUG
-#endif // _DEBUG
                 spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_STOP);
-                spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
-                                       &buffer[0], 0, buffersize);
-                this->handleError();
-                spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
+                prepareFifo(notifysize);
                 continue;
             case ERR_TIMEOUT:
                 std::cerr << exc.what() << std::endl;
@@ -230,13 +242,16 @@ void Digitizer::launchFifo(uint32 notifysize, int n, proc_t processor, bool comp
         this->handleError();
         if (availBytes < notifysize)
         {
-#ifdef _DEBUG
-            std::cerr << "not enough bytes available\n";
-#endif // _DEBUG
+// #ifdef _DEBUG
+            std::cerr << "error: " << availBytes << " bytes available out of " << notifysize  << " at i = " << i << std::endl;
+// #endif // _DEBUG
             continue;
         }
         if (computing)
-            processor(&buffer[shift]);
+        {
+            auto buff_ptr = &buffer[shift];
+            processor(buff_ptr);
+        }
         spcm_dwSetParam_i32(handle, SPC_DATA_AVAIL_CARD_LEN, notifysize);
         this->handleError();
         i++;
