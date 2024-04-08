@@ -26,7 +26,7 @@ public:
         tile_functor(difference_type tile_size)
             : tile_size(tile_size) {}
 
-        __host__ __device__
+        __host__
             difference_type
             operator()(const difference_type &i) const
         {
