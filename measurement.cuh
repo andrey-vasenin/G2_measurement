@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <memory>
+#include <string>
 #include <cstdint>
 #include "digitizer.h"
 #include "dsp.cuh"
@@ -13,8 +14,8 @@
 #include <pybind11/pybind11.h>
 #include "yokogawa_gs210.h"
 
-namespace py = pybind11;
-typedef std::vector<int8_t, PinnedAllocator<int8_t>> hostbuf;
+using corr_t = std::vector<std::vector<std::complex<double>>>;
+using trace_t = std::vector<std::complex<double>>;
 
 class Measurement
 {
@@ -29,7 +30,6 @@ private:
     uint64_t iters_num;
     uint64_t iters_done;
     double sampling_rate;
-    hostbuf buffer;
 
     float offset_current = 0.f;
     float working_current = 0.f;
@@ -66,8 +66,6 @@ public:
 
     void setFirwin(float left_cutoff, float right_cutoff);
 
-    void setCorrelationFirwin(float cutoff_1[2], float cutoff_2[2]);
-
     void setTapers(std::vector<stdvec> tapers);
 
     void setIntermediateFrequency(float frequency);
@@ -93,26 +91,16 @@ public:
     stdvec_c getNoiseSpectrum();
 
     stdvec getPeriodogram();
-  
-    std::vector<std::vector<std::complex<double>>> getCorrelator(string request);
 
-    stdvec_c getSubtractionData();
+    void setSubtractionTraces(stdvec_c trace, stdvec_c offsets);
 
-    stdvec_c getSubtractionNoise();
+    std::pair<stdvec_c, stdvec_c> getSubtractionTraces();
 
-    stdvec_c getRawG1();
-
-    stdvec_c getRawG2();
-
-    void setSubtractionTrace(stdvec_c trace, stdvec_c offsets);
-
-    py::tuple getSubtractionTrace();
+    std::pair<stdvec_c, stdvec_c> getAccumulatedSubstractionData();
 
     int getTotalLength() { return processor->getTotalLength(); }
 
     int getTraceLength() { return processor->getTraceLength(); }
-
-    int getOutSize() { return processor->getOutSize(); }
 
     size_t getNotifySize() { return notify_size; }
 
