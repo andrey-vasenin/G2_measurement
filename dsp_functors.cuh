@@ -3,7 +3,7 @@
 
 #include "dsp.cuh"
 
-struct calibration_functor : thrust::unary_function<tcf &, void>
+struct calibration_functor
 {
     const float a_qi, a_qq;
     const float c_i, c_q;
@@ -23,15 +23,26 @@ struct calibration_functor : thrust::unary_function<tcf &, void>
     }
 };
 
-struct millivolts_functor : thrust::binary_function<const char &, const char &, tcf>
+struct scaler_functor
+{
+    float scalar;
+
+    scaler_functor(float scalar) : scalar(scalar) {}
+
+    __device__ inline void operator()(tcf& x) const {
+        x *= scalar;
+    }
+};
+
+struct millivolts_functor
 {
     const float scale;
 
     millivolts_functor(float s) : scale(s) {}
 
-    __device__ inline __forceinline__ tcf operator()(const char &i, const char &q)
+    __device__ inline tcf operator()(const char2 &b)
     {
-        return tcf(static_cast<float>(i) * scale, static_cast<float>(q) * scale);
+        return tcf(static_cast<float>(b.x), static_cast<float>(b.y)) * scale;
     }
 };
 
@@ -51,7 +62,7 @@ struct power_functor
     }
 };
 
-struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, tcf>
+struct cross_power_functor
 {   
 
     __device__ inline __forceinline__ tcf operator()(const tcf &x, const tcf &y)
@@ -60,7 +71,7 @@ struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, t
     }
 };
 
-struct downconv_functor : public thrust::binary_function<const tcf &, const tcf &, tcf>
+struct downconv_functor
 {
     __device__ inline __forceinline__
         tcf
@@ -70,7 +81,7 @@ struct downconv_functor : public thrust::binary_function<const tcf &, const tcf 
     }
 };
 
-struct taper_functor : public thrust::binary_function<const tcf &, const float &, tcf>
+struct taper_functor
 {
     __device__ inline __forceinline__
         tcf
