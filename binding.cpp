@@ -17,10 +17,11 @@ using output_and_gil_guard = py::call_guard<py::scoped_ostream_redirect,
 using namespace pybind11::literals;
 
 
-PYBIND11_MODULE(multitaper_measurement, m)
+PYBIND11_MODULE(psd_measurement, m)
 {
     py::class_<Measurement>(m, "PsdMeasurer", py::module_local())
-        .def(py::init<std::uintptr_t, unsigned long long, int, double, int, int, const char *>(), output_and_gil_guard())
+        // .def(py::init<std::uintptr_t, unsigned long long, int, double, int, int, const char *>(), output_and_gil_guard())
+        .def(py::init<unsigned long long, unsigned long long, long, float, int, int>(), output_and_gil_guard()) // for test inputs with out digitizer
         .def("set_amplitude", &Measurement::setAmplitude, output_and_gil_guard())
         .def("set_averages_number", &Measurement::setAveragesNumber, output_and_gil_guard())
         .def("set_intermediate_frequency", &Measurement::setIntermediateFrequency, output_and_gil_guard())
@@ -28,6 +29,7 @@ PYBIND11_MODULE(multitaper_measurement, m)
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", &Measurement::setFirwin, output_and_gil_guard())
         .def("set_test_input", &Measurement::setTestInput, output_and_gil_guard())
+        .def("set_welch_window", &Measurement::setWelchWindow, output_and_gil_guard())
         .def("measure", &Measurement::measure, output_and_gil_guard())
         .def("measure_with_coil", &Measurement::measureWithCoil, output_and_gil_guard())
         .def("measure_test", &Measurement::measureTest, output_and_gil_guard())
@@ -37,6 +39,7 @@ PYBIND11_MODULE(multitaper_measurement, m)
         .def("get_data_spectrum", &Measurement::getDataSpectrum, output_and_gil_guard())
         .def("get_noise_spectrum", &Measurement::getNoiseSpectrum, output_and_gil_guard())
         .def("get_periodogram", &Measurement::getPeriodogram, output_and_gil_guard())
+        .def("get_welch_spectrum", &Measurement::getWelchSpectrum, output_and_gil_guard())
         .def("reset", &Measurement::reset, output_and_gil_guard())
         .def("reset_output", &Measurement::resetOutput, output_and_gil_guard())
         .def("free", &Measurement::free, output_and_gil_guard())

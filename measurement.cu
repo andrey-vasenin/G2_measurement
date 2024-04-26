@@ -52,6 +52,25 @@ Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t 
                   second_oversampling, K, coil_address)
 {
 }
+// Constructor for test measurement
+Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double part,
+                int second_oversampling, int K)
+{
+    dig = nullptr;
+    batch_size = batch;
+    segment_size = segment;
+    sampling_rate = 1.25E+9;
+    setAveragesNumber(averages);
+    notify_size = 2 * segment_size * batch_size;
+    processor = new dsp(segment_size, batch_size, part, K, sampling_rate, second_oversampling);
+    initializeBuffer();
+
+    func = [this](int8_t *data) mutable
+    { processor->compute(data); };
+    int trace_length = processor->getTraceLength();
+
+    test_input.resize(notify_size, 0);
+}
 
 Measurement::~Measurement()
 {
@@ -99,6 +118,11 @@ void Measurement::setAmplitude(int ampl)
     processor->setAmplitude(ampl);
 }
 
+void Measurement::setWelchWindow()
+{
+    processor->setWelchWindow();
+}
+
 /* Use frequency in GHz */
 void Measurement::setIntermediateFrequency(float frequency)
 {
@@ -120,8 +144,14 @@ void Measurement::setCalibration(float r, float phi, float offset_i, float offse
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
 {
-    int oversampling = static_cast<int>(std::round(1.25E+9f / dig->getSamplingRate()));
+    long sr = 0;
+    if (dig != nullptr)
+        sr = dig->getSamplingRate();
+    else 
+        sr = sampling_rate;
+    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setFirwin(left_cutoff, right_cutoff, oversampling);
+    cudaDeviceSynchronize();
 }
 
 void Measurement::measure()
@@ -230,6 +260,11 @@ std::pair<stdvec_c, stdvec_c> Measurement::getAccumulatedSubstractionData()
     auto xd = postprocess<tcf, std::complex<float>>(rd);
     auto xn = postprocess<tcf, std::complex<float>>(rn);
     return {xd, xn};
+}
+
+stdvec Measurement::getWelchSpectrum()
+{
+    return postprocess<float, float>(processor->getWelchSpectrum());
 }
 
 void Measurement::setTapers(std::vector<stdvec> tapers)

@@ -48,11 +48,16 @@ public:
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
                 int second_oversampling, int K, const char *coil_address);
 
+    Measurement(uint64_t averages, uint64_t batch, long segment, double part,
+                int second_oversampling, int K);
+
     void setAmplitude(int ampl);
 
     void setCurrents(float wc, float oc);
 
     void setAveragesNumber(uint64_t averages);
+
+    void setWelchWindow();
 
     ~Measurement();
 
@@ -90,6 +95,8 @@ public:
 
     stdvec_c getNoiseSpectrum();
 
+    stdvec getWelchSpectrum();
+   
     stdvec getPeriodogram();
 
     void setSubtractionTraces(stdvec_c trace, stdvec_c offsets);
