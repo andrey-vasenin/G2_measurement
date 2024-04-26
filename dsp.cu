@@ -91,6 +91,10 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
     average_data.resize(total_length, tcf(0.f));
     average_noise.resize(total_length, tcf(0.f));
 
+    welch_number_of_parts = (resampled_trace_length - welch_overlap) / (welch_size - welch_overlap);
+    welch_replicated_lenght = welch_number_of_parts * welch_size * batch_size;
+    welch_window.resize(welch_size, 0.f);
+
     // Setup multitaper
     K = K_;
     tapers.resize(K);
@@ -121,6 +125,10 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         noise[i].resize(total_length);
         noise_resampled[i].resize(resampled_total_length);
 
+        replicated_signal[i].resize(welch_replicated_lenght, tcf(0.f));
+        replicated_noise[i].resize(welch_replicated_lenght, tcf(0.f));
+        welch_spectrum[i].resize(welch_replicated_lenght, 0.f);
+
         // Initialize cuFFT plans
         check_cufft_error(cufftPlan1d(&plans[i], static_cast<int>(trace_length),
                                       CUFFT_C2C, static_cast<int>(batch_size)),
@@ -128,11 +136,16 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
         check_cufft_error(cufftPlan1d(&resampled_plans[i], static_cast<int>(resampled_trace_length),
                                       CUFFT_C2C, static_cast<int>(batch_size)),
                           "Error initializing cuFFT plan\n");
-
+        check_cufft_error(cufftPlan1d(&welch_plans[i], static_cast<int>(welch_size),
+                                      CUFFT_C2C, static_cast<int>(welch_number_of_parts * batch_size)),
+                          "Error initializing cuFFT plan\n");
+        
         // Assign streams to cuFFT plans
         check_cufft_error(cufftSetStream(plans[i], streams[i]),
                           "Error assigning a stream to a cuFFT plan\n");
         check_cufft_error(cufftSetStream(resampled_plans[i], streams[i]),
+                          "Error assigning a stream to a cuFFT plan\n");
+        check_cufft_error(cufftSetStream(welch_plans[i], streams[i]),
                           "Error assigning a stream to a cuFFT plan\n");
 
         // Initialize cuBLAS
@@ -152,6 +165,7 @@ dsp::dsp(size_t len, uint64_t n, double part, int K_,
 // DSP destructor
 dsp::~dsp()
 {
+deleteBuffer();
     for (int i = 0; i < num_streams; i++)
     {
         // Destroy cuBLAS
@@ -161,6 +175,7 @@ dsp::~dsp()
         // Destroy cuFFT plans
         cufftDestroy(plans[i]);
         cufftDestroy(resampled_plans[i]);
+        cufftDestroy(welch_plans[i]);
 
         // Destroy GPU streams
         handleError(cudaStreamDestroy(streams[i]));
@@ -187,6 +202,39 @@ void dsp::makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, int
         hFirwin[i] = ((j < l_idx) || (j > r_idx)) ? 0if : 1.0f + 0if;
     }
     window = hFirwin;
+}
+
+void dsp::setWelchWindow()
+{
+    // thrust::transform(thrust::make_counting_iterator(int(0)), thrust::make_counting_iterator(int(welch_size)), welch_window.begin(), hann_window_functor(welch_size));
+    thrust::transform(thrust::make_counting_iterator(int(0)), thrust::make_counting_iterator(int(welch_size)), welch_window.begin(), gaussian_window_functor(welch_size, welch_size/2));
+}
+
+void dsp::dataReplicationAndWindowing(gpuvec_c &data, gpuvec_c &replication, int stream_num)
+{
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]), thrust::make_counting_iterator(size_t(0)), 
+                  thrust::make_counting_iterator(welch_replicated_lenght),
+                  replication.begin(),
+                  replication_and_windowing_functor(welch_size, welch_overlap, resampled_total_length, 
+                  thrust::raw_pointer_cast(data.data()), thrust::raw_pointer_cast(welch_window.data())));
+}
+
+void dsp::Welch(gpuvec_c &signal, gpuvec_c &noise, gpuvec &output, int stream_num)
+{
+    dataReplicationAndWindowing(signal, replicated_signal[stream_num], stream_num);
+    cufftComplex *cufft_signal = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(replicated_signal[stream_num].data()));
+    auto cufftstat1 = cufftExecC2C(welch_plans[stream_num], cufft_signal, cufft_signal, CUFFT_FORWARD);
+    check_cufft_error(cufftstat1, "Error executing cufft");
+
+    dataReplicationAndWindowing(noise, replicated_noise[stream_num], stream_num);
+    cufftComplex *cufft_noise = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(replicated_noise[stream_num].data()));
+    auto cufftstat2 = cufftExecC2C(welch_plans[stream_num], cufft_noise, cufft_noise, CUFFT_FORWARD);
+    check_cufft_error(cufftstat2, "Error executing cufft");
+
+    thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
+                     thrust::make_zip_iterator(replicated_signal[stream_num].begin(), replicated_noise[stream_num].begin(), output.begin()),
+                     thrust::make_zip_iterator(replicated_signal[stream_num].end(), replicated_noise[stream_num].end(), output.end()),
+                     thrust::make_zip_function(power_functor()));
 }
 
 // Error handler
@@ -275,6 +323,9 @@ void dsp::resetOutput()
         fill_with_zero(periodogram[i]);
         fill_with_zero(data_fft[i]);
         fill_with_zero(noise_fft[i]);
+        fill_with_zero(replicated_signal[i]);
+        fill_with_zero(replicated_noise[i]);
+        fill_with_zero(welch_spectrum[i]);
     }
 }
 
@@ -304,15 +355,17 @@ void dsp::compute(const hostbuf buffer_ptr)
     addDataToOutput(data[stream_num], average_data, stream_num);
     addDataToOutput(noise[stream_num], average_noise, stream_num);
 
-    calculateField(data[stream_num], noise[stream_num], field[stream_num], streams[stream_num]);
-    calculatePower(data[stream_num], noise[stream_num], power[stream_num], streams[stream_num]);
+    // calculateField(data[stream_num], noise[stream_num], field[stream_num], streams[stream_num]);
+    // calculatePower(data[stream_num], noise[stream_num], power[stream_num], streams[stream_num]);
+
+    Welch(data[stream_num], noise[stream_num], welch_spectrum[stream_num], stream_num);
 
     // resampleFFT(data[stream_num], data_resampled[stream_num], stream_num);
     // resampleFFT(noise[stream_num], noise_resampled[stream_num], stream_num);
     // calculateMultitaperSpectrum(data_resampled[stream_num], noise_resampled[stream_num],
     //                             data_fft[stream_num], noise_fft[stream_num], spectrum[stream_num], stream_num);
-    calculatePeriodogram(data[stream_num], noise[stream_num],
-                         periodogram[stream_num], stream_num);
+    // calculatePeriodogram(data[stream_num], noise[stream_num],
+    //                      periodogram[stream_num], stream_num);
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
@@ -349,8 +402,11 @@ void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num)
     cufftExecC2C(plans[stream_num], cufft_data, cufft_data, CUFFT_INVERSE);
     check_cufft_error(cufftstat, "Error executing cufft");
     // Step 4. Normalize the FFT for the output to equal the input
-    thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
-                     data.begin(), data.end(), scaler_functor(1.f / static_cast<float>(trace_length)));
+    // thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
+    //                  data.begin(), data.end(), scaler_functor(1.f / static_cast<float>(trace_length)));
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+                      data.begin(), data.end(), thrust::constant_iterator<tcf>(1.f / static_cast<float>(trace_length)),
+                      data.begin(), thrust::multiplies<tcf>());
 }
 
 // Sums newly processed data with previous data for averaging
@@ -530,15 +586,17 @@ thrust::device_vector<T> dsp::sumOverStreams(const thrust::device_vector<T> *tra
 template <typename T>
 thrust::host_vector<T> dsp::sumOverBatch(const thrust::device_vector<T> &trace)
 {
-    size_t N = trace.size() / batch_size;
-    thrust::host_vector<T> host_trace(N);
-    using iter = typename thrust::device_vector<T>::const_iterator;
-    for (size_t j = 0; j < N; ++j)
-    {
-        strided_range<iter> tmp_iter(trace.begin() + j, trace.end(), N);
-        T el = thrust::reduce(tmp_iter.begin(), tmp_iter.end(), T(0.f), thrust::plus<T>());
-        host_trace[j] = el / T(batch_size);
-    }
+    // size_t N = trace.size() / batch_size;
+    // thrust::host_vector<T> host_trace(N);
+    thrust::host_vector<T> host_trace(trace.size());
+    host_trace = trace;
+    // using iter = typename thrust::device_vector<T>::const_iterator;
+    // for (size_t j = 0; j < N; ++j)
+    // {
+    //     strided_range<iter> tmp_iter(trace.begin() + j, trace.end(), N);
+    //     T el = thrust::reduce(tmp_iter.begin(), tmp_iter.end(), T(0.f), thrust::plus<T>());
+    //     host_trace[j] = el / T(batch_size);
+    // }
     return host_trace;
 }
 
@@ -573,6 +631,27 @@ hostvec_c dsp::getDataSpectrum()
 hostvec_c dsp::getNoiseSpectrum()
 {
     return getCumulativeTrace(noise_fft);
+}
+
+hostvec dsp::getWelchSpectrum()
+{
+    handleError(cudaDeviceSynchronize());
+    gpuvec tmp(welch_spectrum[0].size(), 0.f);
+    for (int i = 0; i < num_streams; i++)
+        thrust::transform(welch_spectrum[i].begin(), welch_spectrum[i].end(), tmp.begin(), tmp.begin(), thrust::plus<float>());
+
+    gpuvec device_spec(welch_size, 0.f);
+
+    for (int i = 0; i < welch_number_of_parts; ++i) {
+        thrust::transform(device_spec.begin(), device_spec.end(),
+                          tmp.begin() + i * welch_size,
+                          device_spec.begin(),
+                          thrust::plus<float>());
+    }
+    float divisor = float(welch_number_of_parts * batch_size);
+    hostvec tmp_host = device_spec;
+    thrust::transform(tmp_host.begin(), tmp_host.end(), tmp_host.begin(), [divisor](float x) { return x / divisor; });
+    return tmp_host;
 }
 
 // Returns the cumulative field

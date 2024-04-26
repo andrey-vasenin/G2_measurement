@@ -90,6 +90,7 @@ class dsp
 
     /* cuFFT required variables */
     cufftHandle plans[num_streams];
+    cufftHandle welch_plans[num_streams];
 
     /* cuBLAS required variables */
     cublasHandle_t cublas_handles[num_streams];
@@ -100,6 +101,18 @@ class dsp
 
     /* Down-conversion calibration variables */
     float a_qi, a_qq, c_i, c_q;
+
+    /* Welch's method arrays*/
+    gpuvec welch_window;
+    gpuvec_c replicated_signal[num_streams];
+    gpuvec_c replicated_noise[num_streams];
+    gpuvec welch_spectrum[num_streams];
+
+    /* Variables for Welch's method applying*/
+    int welch_size = 100;
+    int welch_overlap = 50;
+    int welch_number_of_parts;
+    size_t welch_replicated_lenght;
 
 public:
     dsp(size_t len, uint64_t n, double part, int K_, double samplerate, int second_oversampling);
@@ -123,6 +136,11 @@ public:
     hostbuf getBuffer();
 
     void compute(const hostbuf buffer_ptr);
+
+    void setWelchWindow();
+    void dataReplicationAndWindowing(gpuvec_c &data, gpuvec_c &replication, int stream_num);
+    void Welch(gpuvec_c &signal, gpuvec_c &noise, gpuvec &output, int stream_num);
+    hostvec getWelchSpectrum();
 
     hostvec getCumulativePower();
 
