@@ -52,3 +52,15 @@ pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs
 target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
 target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
 target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
+
+# # Determine the output directory for the compiled module
+# set(MODULE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
+# # Optional: Specify the output directory for the generated .pyi files
+# set(PYI_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/stubs)
+
+# add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+#     COMMAND ${CMAKE_COMMAND} -E make_directory ${PYI_OUTPUT_DIRECTORY}
+#     COMMAND ${CMAKE_COMMAND} -E env "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}" ${Python_EXECUTABLE} -m mypy.stubgen -o ${PYI_OUTPUT_DIRECTORY} --no-import --include-private ${MODULE_OUTPUT_DIRECTORY}/${PROJECT_NAME}.pyd
+#     COMMENT "Generating .pyi stub files for ${PROJECT_NAME}"
+# )

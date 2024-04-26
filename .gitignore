@@ -7,3 +7,5 @@ build
 eigen-3.4.0
 old_files
 x64
+*.ipynb
+.gitignore
