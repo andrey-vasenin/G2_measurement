@@ -2,8 +2,60 @@
 #define DSP_FUNCTORS_CUH
 
 #include "dsp.cuh"
+#include <corecrt_math_defines.h>
 
-struct calibration_functor
+struct hann_window_functor
+{
+    const int N;
+    hann_window_functor(int _N) : N(_N) {}
+
+    __host__ __device__
+    float operator()(const int& n) const
+    {
+        return 0.5 * (1 - cos(2 * M_PI * n / (N - 1)));
+    }
+};
+
+struct gaussian_window_functor
+{
+    const int N;
+    const float sigma;
+
+    gaussian_window_functor(int _N, float _sigma) : N(_N), sigma(_sigma) {}
+
+    __host__ __device__
+    float operator()(const int& n) const
+    {
+        float numerator = static_cast<float>(n) - (N - 1) / 2.0f;
+        float exponent = -0.5f * (numerator / sigma) * (numerator / sigma);
+        return exp(exponent);
+    }
+};
+
+struct replication_and_windowing_functor {
+    int L; // Длина сегмента
+    int M; // Перекрытие
+    int original_length; // Длина исходного сигнала
+    const tcf* original_signal; // Указатель на исходный сигнал
+    const float* window_data; // Сырой указатель на данные окна
+
+    replication_and_windowing_functor(int _L, int _M, int _original_length, const tcf* _original_signal, const float* _window_data)
+        : L(_L), M(_M), original_length(_original_length), original_signal(_original_signal), window_data(_window_data) {}
+
+    __device__ tcf operator()(const size_t& i) const {
+        int segment_index = i % L; // Индекс внутри сегмента
+        int segment_number = i / L; // Номер сегмента
+        int original_index = segment_number * (L - M) + segment_index;
+
+        if (original_index < original_length) {
+            return original_signal[original_index] * tcf(window_data[segment_index]);
+        } else {
+            return tcf(0.f); // Дополнение нулями, если выходим за пределы исходного сигнала
+        }
+    }
+};
+
+struct calibration_functor : thrust::unary_function<tcf &, void>
 {
     const float a_qi, a_qq;
     const float c_i, c_q;
