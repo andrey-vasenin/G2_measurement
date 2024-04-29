@@ -34,6 +34,8 @@ private:
     double sampling_rate;
     hostbuf buffer;
 
+    int second_ovs;
+
     float offset_current = 0.f;
     float working_current = 0.f;
 
@@ -51,7 +53,7 @@ public:
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
                 int second_oversampling, const char *coil_address);
 
-    Measurement(uint64_t averages, uint64_t batch, long segment, double part,
+    Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
                 int second_oversampling);
     
     void setDigParameters();
@@ -73,10 +75,17 @@ public:
     void setCalibration(int line_num, float r, float phi, float offset_i, float offset_q);
 
     void setFirwin(float left_cutoff, float right_cutoff);
+    void setFirwin(const stdvec_c window);
+
+    void setCentralPeakWin(float left_cutoff, float right_cutoff);
+    void setCentralPeakWin(const stdvec_c window);
 
     void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2);
+    void setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2);
 
     void setIntermediateFrequency(float frequency);
+
+    void setCorrDowncovertCoeffs(float freq1, float freq2);
 
     void measure();
 
@@ -89,6 +98,10 @@ public:
     void setTestInput(const std::vector<int8_t> &input);
 
     corr_t getG1Correlator();
+
+    corr_t getG1FiltCorrelator();
+
+    corr_t getG1FiltConjCorrelator();
   
     corr_t getG2Correlator();
 
@@ -97,6 +110,8 @@ public:
     corr_t getG2FilteredCorrelator();
 
     corr_t getG2FilteredCrossSegmentCorrelator();
+
+    stdvec_c getInterferenceResult();
 
     std::vector<stdvec_c> getSubtractionData();
 
