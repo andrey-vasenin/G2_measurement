@@ -3,6 +3,13 @@
 
 #include "dsp.cuh"
 
+struct complex_conjugate {
+    __device__
+    thrust::complex<float> operator()(thrust::complex<float>& x) const {
+        return thrust::conj(x);
+    }
+};
+
 struct calibration_functor : thrust::unary_function<tcf &, void>
 {
     const float a_qi, a_qq;
