@@ -10,7 +10,7 @@
 #include <ostream>
 #include "dlltyp.h"
 #include "regs.h"
-// #include "dsp.cuh"
+#include "dsp.cuh"
 
 typedef std::function<void(int8_t *)> proc_t;
 
