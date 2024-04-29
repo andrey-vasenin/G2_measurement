@@ -1,4 +1,5 @@
 #include "digitizer.h"
+#include "dlltyp.h"
 #include "dsp.cuh"
 #include "measurement.cuh"
 #include <algorithm>
@@ -42,6 +43,8 @@ int main()
         std::pair<float, float> firwin_l (1, 99);
         std::pair<float, float> firwin_r (1, 99);
         mes->setCorrelationFirwin(firwin_l, firwin_r);
+        mes->setCorrDowncovertCoeffs(1e-3, 10e-3);
+        mes->setCentralPeakWin(1e-3, 10e-3);
         auto t1 = high_resolution_clock::now();
         mes->measureWithCoil();
         auto t2 = high_resolution_clock::now();
@@ -49,21 +52,29 @@ int main()
         std::cout << "Measurement duration: " << dur.count() << " mcs\n";
         auto one_iter_dur = dur / num_iter;
         std::cout << "One iteration duration: " << one_iter_dur.count() << " mcs\n";
-        // auto sd = mes->getSubtractionData();
-        // mes->setSubtractionTrace(sd);
-        // auto st = mes->getSubtractionTrace();
-        // tcf a = st[0][0];
-        // tcf b = sd[0][0];
+        auto sd = mes->getSubtractionData();
+        mes->setSubtractionTrace(sd);
+        auto st = mes->getSubtractionTrace();
+        tcf a = st[0][0];
+        tcf b = sd[0][0];
         // std::cout << a << ' ' << b << std::endl;
         auto g2 = mes->getG2Correlator();
         auto g2_cross = mes->getG2CrossSegmentCorrelator();
         auto g2_filt = mes->getG2FilteredCorrelator();
         auto g2_filt_cross = mes->getG2FilteredCrossSegmentCorrelator();
+        auto g1 = mes->getG1Correlator();
+        auto g1_filt = mes->getG1FiltCorrelator();
+        auto g1_filt_conj = mes->getG1FiltConjCorrelator();
+        auto inter = mes->getInterferenceResult();
 
         std::cout << g2[0][0] << std::endl;
         std::cout << g2_cross[0][0] << std::endl;
         std::cout << g2_filt[0][0] << std::endl;
         std::cout << g2_filt_cross[0][0] << std::endl;
+        std::cout << g1[0][0] << std::endl;
+        std::cout << g1_filt[0][0] << std::endl;
+        std::cout << g1_filt_conj[0][0] << std::endl;
+        std::cout << inter[0] << std::endl;
 
     }
     catch (const std::runtime_error& e) {
