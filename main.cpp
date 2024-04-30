@@ -58,8 +58,8 @@ int main()
         tcf a = st[0][0];
         tcf b = sd[0][0];
         // std::cout << a << ' ' << b << std::endl;
-        auto g2 = mes->getG2Correlator();
-        auto g2_cross = mes->getG2CrossSegmentCorrelator();
+        // auto g2 = mes->getG2Correlator();
+        // auto g2_cross = mes->getG2CrossSegmentCorrelator();
         auto g2_filt = mes->getG2FilteredCorrelator();
         auto g2_filt_cross = mes->getG2FilteredCrossSegmentCorrelator();
         auto g1 = mes->getG1Correlator();
@@ -67,8 +67,8 @@ int main()
         auto g1_filt_conj = mes->getG1FiltConjCorrelator();
         auto inter = mes->getInterferenceResult();
 
-        std::cout << g2[0][0] << std::endl;
-        std::cout << g2_cross[0][0] << std::endl;
+        // std::cout << g2[0][0] << std::endl;
+        // std::cout << g2_cross[0][0] << std::endl;
         std::cout << g2_filt[0][0] << std::endl;
         std::cout << g2_filt_cross[0][0] << std::endl;
         std::cout << g1[0][0] << std::endl;
