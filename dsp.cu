@@ -377,7 +377,7 @@ void dsp::compute(const hostbuf buffer_ptr)
     
     // Preprocessing Data 1
     applyDownConversionCalibration(data1[stream_num], streams[stream_num], 0);
-    applyFilter(data1[stream_num], firwin, stream_num, plans[stream_num]);
+    applyFilter(data1[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
     downconvert(data1[stream_num], stream_num);
     resample(data1[stream_num], data1_resampled[stream_num], streams[stream_num]);
     subtractDataFromOutput(subtraction_trace1, data1_resampled[stream_num], stream_num);
@@ -385,37 +385,42 @@ void dsp::compute(const hostbuf buffer_ptr)
     
     // Preprocessing Data 2
     applyDownConversionCalibration(data2[stream_num], streams[stream_num], 1);
-    applyFilter(data2[stream_num], firwin, stream_num, plans[stream_num]);
+    applyFilter(data2[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
     downconvert(data2[stream_num], stream_num);
     resample(data2[stream_num], data2_resampled[stream_num], streams[stream_num]);
     subtractDataFromOutput(subtraction_trace2, data2_resampled[stream_num], stream_num);
     addDataToOutput(data2_resampled[stream_num], subtraction_data2[stream_num], stream_num);
 
     // Filtering left sideband
-    data_for_correlation1[stream_num] = data1_resampled[stream_num];
-    applyFilter(data_for_correlation1[stream_num], corr_firwin1, stream_num, corr_plans[stream_num]);
+    copyData(data1_resampled[stream_num], data_for_correlation1[stream_num], streams[stream_num]);
+    applyFilter(data_for_correlation1[stream_num], corr_firwin1, stream_num, resampled_trace_length, corr_plans[stream_num]);
     // addDataToOutput(data_for_correlation1[stream_num], subtraction_data1[stream_num], stream_num);
     
     // Filtering right sideband
-    data_for_correlation2[stream_num] = data2_resampled[stream_num];
-    applyFilter(data_for_correlation2[stream_num], corr_firwin2, stream_num, corr_plans[stream_num]);
+    copyData(data2_resampled[stream_num], data_for_correlation2[stream_num], streams[stream_num]);
+    applyFilter(data_for_correlation2[stream_num], corr_firwin2, stream_num, resampled_trace_length, corr_plans[stream_num]);
     // addDataToOutput(data_for_correlation2[stream_num], subtraction_data2[stream_num], stream_num);
 
     // // Filtering out central peak
-    data_without_central_peak1[stream_num] = data1_resampled[stream_num];
-    applyFilter(data_without_central_peak1[stream_num], center_peak_win, stream_num, corr_plans[stream_num]);
-    data_without_central_peak2[stream_num] = data2_resampled[stream_num];
-    applyFilter(data_without_central_peak2[stream_num], center_peak_win, stream_num, corr_plans[stream_num]);
+    copyData(data1_resampled[stream_num], data_without_central_peak1[stream_num], streams[stream_num]);
+    applyFilter(data_without_central_peak1[stream_num], center_peak_win, stream_num, resampled_trace_length, corr_plans[stream_num]);
+    copyData(data2_resampled[stream_num], data_without_central_peak2[stream_num], streams[stream_num]);
+    applyFilter(data_without_central_peak2[stream_num], center_peak_win, stream_num, resampled_trace_length, corr_plans[stream_num]);
 
-    calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt[stream_num], cublas_handles[stream_num], 1); // <S1 S2>
-    calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt_conj[stream_num], cublas_handles[stream_num], 2); // <S1* S2>
-    calculateG1gemm(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], g1_cross_out[stream_num], cublas_handles[stream_num], 2); // correlation without central peak
+    calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt[stream_num], cublas_handles[stream_num], op_t); // <S1 S2>
+    calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt_conj[stream_num], cublas_handles[stream_num], op_c); // <S1* S2>
+    calculateG1gemm(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], g1_cross_out[stream_num], cublas_handles[stream_num], op_c); // correlation without central peak
     calculateG2Alt(data_for_correlation1[stream_num], data_for_correlation2[stream_num], power1[stream_num], power2[stream_num], power_short[stream_num], 
     g2_out_filtered[stream_num], g2_out_filtered_cross_segment[stream_num], streams[stream_num], cublas_handles[stream_num]); // <S1* S2* S2 S1>
     // calculateG2New(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], cross_power[stream_num], cross_power_short[stream_num], 
     // g2_out[stream_num], g2_out_cross_segment[stream_num], streams[stream_num], cublas_handles[stream_num]); // correlation without central peak
 
     calculateInterference(data1_resampled[stream_num], data2_resampled[stream_num], interference_out[stream_num], stream_num);
+}
+
+void dsp::copyData(gpuvec_c &source, gpuvec_c &dist, cudaStream_t &stream)
+{
+    thrust::copy(thrust::cuda::par_nosync.on(stream), source.begin(), source.end(), dist.begin());
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
@@ -443,7 +448,7 @@ void dsp::splitAndConvertDataToMillivolts(gpuvec_c &data_left, gpuvec_c &data_ri
 }
 
 // Applies the filter with the specified window to the data using FFT convolution
-void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num, cufftHandle &plan)
+void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num, size_t length, cufftHandle &plan)
 {
     // Step 1. Take FFT of each segment
     cufftComplex *cufft_data = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(data.data()));
@@ -457,9 +462,29 @@ void dsp::applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num, cu
     check_cufft_error(cufftstat, "Error executing cufft");
     // Step 4. Normalize the FFT for the output to equal the input
     thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
-                      data.begin(), data.end(), thrust::constant_iterator<tcf>(1.f / static_cast<float>(trace_length)),
+                      data.begin(), data.end(), thrust::constant_iterator<tcf>(1.f / static_cast<float>(length)),
                       data.begin(), thrust::multiplies<tcf>());
 }
+
+// void calculateFFT(gpuvec_c &data, int stream_num, int direction, cufftHandle &plan)
+// {
+//     cufftComplex *cufft_data = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(data.data()));
+//     auto cufftstat = cufftExecC2C(plan, cufft_data, cufft_data, direction);
+//     check_cufft_error(cufftstat, "Error executing cufft");
+// }
+
+// void dsp::applyFilterAlt(gpuvec_c &fftdata, const gpuvec_c &window, int stream_num, size_t length, cufftHandle &plan)
+// {
+//     // Step 1. Multiply each segment by a window
+//     thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+//                       fftdata.begin(), fftdata.end(), window.begin(), fftdata.begin(), thrust::multiplies<tcf>());
+//     // Step 3. Take inverse FFT of each segment
+//     calculateFFT(fftdata, stream_num, 1, plan);
+//     // Step 4. Normalize the FFT for the output to equal the input
+//     thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+//                       fftdata.begin(), fftdata.end(), thrust::constant_iterator<tcf>(1.f / static_cast<float>(length)),
+//                       fftdata.begin(), thrust::multiplies<tcf>());
+// }
 
 // Sums newly processed data with previous data for averaging
 void dsp::addDataToOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num)
@@ -544,11 +569,9 @@ void dsp::calculateG1(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublas
         "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
 }
 
-void dsp::calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, int a)
+void dsp::calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, cublasOperation_t &op)
 {
     using namespace std::string_literals;
-    auto op = (a == 1) ? CUBLAS_OP_T : CUBLAS_OP_C;
-
     // Compute correlation for the signal and add it to the output
     auto cublas_status = cublasCgemm3m(handle,
                                      CUBLAS_OP_N, op, resampled_trace_length, resampled_trace_length, batch_size,

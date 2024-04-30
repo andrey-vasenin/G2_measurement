@@ -114,6 +114,8 @@ private:
     const cuComplex alpha = make_cuComplex(1, 0);
     const cuComplex beta = make_cuComplex(1, 0);
     const float beta_float = 1.0;
+    cublasOperation_t op_t = CUBLAS_OP_T;
+    cublasOperation_t op_c = CUBLAS_OP_C;
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
@@ -230,7 +232,13 @@ protected:
 
     void subtractDataFromOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
 
-    void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num, cufftHandle &plans);
+    void applyFilter(gpuvec_c &data, const gpuvec_c &window, int stream_num, size_t length, cufftHandle &plan);
+
+    void calculateFFT(gpuvec_c &data, int stream_num, int direction, cufftHandle &plan);
+
+    void applyFilterAlt(gpuvec_c &fftdata, const gpuvec_c &window, int stream_num, size_t length, cufftHandle &plan);
+
+    void copyData(gpuvec_c &source, gpuvec_c &dist, cudaStream_t &stream);
 
     void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
 
@@ -238,7 +246,7 @@ protected:
 
     void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
 
-    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, int a = 2);
+    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, cublasOperation_t &op);
 
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 
