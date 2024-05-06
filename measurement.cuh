@@ -79,11 +79,13 @@ public:
     void setFirwin(float left_cutoff, float right_cutoff);
     void setFirwin(const stdvec_c window);
 
-    void setCentralPeakWin(float left_cutoff, float right_cutoff);
-    void setCentralPeakWin(const stdvec_c window);
+    void setAdditionalFirwins(std::vector<std::pair<float, float>> cutoffs);
 
-    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2);
-    void setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2);
+    // void setCentralPeakWin(float left_cutoff, float right_cutoff);
+    // void setCentralPeakWin(const stdvec_c window);
+
+    // void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2);
+    // void setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2);
 
     void setIntermediateFrequency(float frequency);
 
@@ -107,7 +109,7 @@ public:
 
     std::pair<corr_c, corr_r> getG2Filt();
 
-    std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> getPSD();
+    // std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> getPSD();
 
     stdvec_c getInterference();
 
@@ -125,14 +127,18 @@ public:
 
     size_t getNotifySize() { return notify_size; };
 
-    std::vector<std::vector<std::complex<float>>> getFirwins()
-    {
-        auto firwins = processor->getAllFirwins();
-        std::vector<std::vector<std::complex<float>>> result(4);
-        for (int i = 0; i < 4; i++)
-            result[i] = std::vector<std::complex<float>>(firwins[i].begin(), firwins[i].end());
-        return result;
-    };
+    // std::vector<std::vector<std::complex<float>>> getFirwins()
+    // {
+    //     auto firwins = processor->getAllFirwins();
+    //     std::vector<std::vector<std::complex<float>>> result(4);
+    //     for (int i = 0; i < 4; i++)
+    //         result[i] = std::vector<std::complex<float>>(firwins[i].begin(), firwins[i].end());
+    //     return result;
+    // };
+
+    std::vector<stdvec> getRealResults();
+
+    std::vector<stdvec_c> getComplexResults();
 
 protected:
     void initializeBuffer();

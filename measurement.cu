@@ -157,13 +157,7 @@ void Measurement::setCalibration(float r, float phi, float offset_i, float offse
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
 {
-    long sr = 0;
-    if (dig != nullptr)
-        sr = dig->getSamplingRate();
-    else
-        sr = sampling_rate;
-    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
-    processor->setFirwin(left_cutoff, right_cutoff, oversampling);
+    processor->setFirwin(left_cutoff, right_cutoff);
     cudaDeviceSynchronize();
 }
 
@@ -173,42 +167,47 @@ void Measurement::setFirwin(const stdvec_c window)
     processor->setFirwin(tile_window);
 }
 
-void Measurement::setCentralPeakWin(float left_cutoff, float right_cutoff)
+void Measurement::setAdditionalFirwins(std::vector<std::pair<float, float>> cutoffs)
 {
-    long sr = 0;
-    if (dig != nullptr)
-        sr = dig->getSamplingRate();
-    else
-        sr = sampling_rate;
-    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
-    processor->setCentralPeakWin(left_cutoff, right_cutoff, oversampling);
-    cudaDeviceSynchronize();
+    processor->setAdditionalFilters(cutoffs);
 }
 
-void Measurement::setCentralPeakWin(const stdvec_c window)
-{
-    auto tile_window = tile(window, batch_size);
-    processor->setCentralPeakWin(tile_window);
-}
+// void Measurement::setCentralPeakWin(float left_cutoff, float right_cutoff)
+// {
+//     long sr = 0;
+//     if (dig != nullptr)
+//         sr = dig->getSamplingRate();
+//     else
+//         sr = sampling_rate;
+//     int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
+//     processor->setCentralPeakWin(left_cutoff, right_cutoff, oversampling);
+//     cudaDeviceSynchronize();
+// }
 
-void Measurement::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2)
-{
-    long sr = 0;
-    if (dig != nullptr)
-        sr = dig->getSamplingRate();
-    else
-        sr = sampling_rate;
-    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
-    processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
-    cudaDeviceSynchronize();
-}
+// void Measurement::setCentralPeakWin(const stdvec_c window)
+// {
+//     auto tile_window = tile(window, batch_size);
+//     processor->setCentralPeakWin(tile_window);
+// }
 
-void Measurement::setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2)
-{
-    auto tile_window1 = tile(window1, batch_size);
-    auto tile_window2 = tile(window2, batch_size);
-    processor->setCorrelationFirwin(tile_window1, tile_window2);
-}
+// void Measurement::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2)
+// {
+//     long sr = 0;
+//     if (dig != nullptr)
+//         sr = dig->getSamplingRate();
+//     else
+//         sr = sampling_rate;
+//     int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
+//     processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
+//     cudaDeviceSynchronize();
+// }
+
+// void Measurement::setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2)
+// {
+//     auto tile_window1 = tile(window1, batch_size);
+//     auto tile_window2 = tile(window2, batch_size);
+//     processor->setCorrelationFirwin(tile_window1, tile_window2);
+// }
 
 void Measurement::measure()
 {
@@ -367,15 +366,15 @@ stdvec_c Measurement::getInterference()
     return avg_res;
 }
 
-std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> Measurement::getPSD()
-{
-    auto result = processor->getPSDResults();
-    return {postprocess<float, float>(std::get<0>(result)),
-            postprocess<float, float>(std::get<1>(result)),
-            postprocess<float, float>(std::get<2>(result)),
-            postprocess<float, float>(std::get<3>(result)),
-            postprocess<float, float>(std::get<4>(result))};
-}
+// std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> Measurement::getPSD()
+// {
+//     auto result = processor->getPSDResults();
+//     return {postprocess<float, float>(std::get<0>(result)),
+//             postprocess<float, float>(std::get<1>(result)),
+//             postprocess<float, float>(std::get<2>(result)),
+//             postprocess<float, float>(std::get<3>(result)),
+//             postprocess<float, float>(std::get<4>(result))};
+// }
 
 void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
 {
@@ -404,6 +403,24 @@ std::vector<stdvec_c> Measurement::getSubtractionTrace()
     std::vector<stdvec_c> subtraction_trace;
     processor->getSubtractionTrace(subtraction_trace);
     return subtraction_trace;
+}
+
+std::vector<stdvec> Measurement::getRealResults()
+{
+    auto h_results = processor->getRealResults();
+    std::vector<stdvec> results;
+    for (auto h_result : h_results)
+        results.push_back(stdvec(h_result.begin(), h_result.end()));
+    return results;
+}
+
+std::vector<stdvec_c> Measurement::getComplexResults()
+{
+    auto h_results = processor->getComplexResults();
+    std::vector<stdvec_c> results;
+    for (auto h_result : h_results)
+        results.push_back(stdvec_c(h_result.begin(), h_result.end()));
+    return results;
 }
 
 template <typename T, typename V>

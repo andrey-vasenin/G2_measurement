@@ -27,30 +27,28 @@
 #include <thrust/iterator/zip_iterator.h>
 #include <thrust/zip_function.h>
 #include <thrust/iterator/constant_iterator.h>
-// #include "dsp_helpers.cuh"
-// #include "sidebands.cuh"
+#include "dsp_helpers.cuh"
+#include "sidebands.cuh"
 
 // DSP constructor
 dsp::dsp(size_t len, uint64_t n, double part,
-         double samplerate, int second_oversampling) : trace_length{static_cast<size_t>(std::round((double)len * part))}, // Length of a signal or noise trace
-                                                       batch_size{n},                                                     // Number of segments in a buffer (same: number of traces in data)
-                                                       total_length{batch_size * trace_length},
-                                                       oversampling{second_oversampling},
-                                                       resampled_trace_length{trace_length / oversampling},
-                                                       resampled_total_length{total_length / oversampling},
-                                                       out_size{resampled_trace_length * resampled_trace_length},
-                                                       trace1_start{0},       // Start of the signal data
-                                                       trace2_start{len / 2}, // Start of the noise data
-                                                       pitch{len}             // Segment length in a buffer
+         double sample_rate, int second_oversampling) : trace_length{static_cast<size_t>(std::round((double)len * part))}, // Length of a signal or noise trace
+                                                        batch_size{n},                                                     // Number of segments in a buffer (same: number of traces in data)
+                                                        total_length{batch_size * trace_length},
+                                                        samplerate{static_cast<float>(sample_rate)},
+                                                        oversampling{second_oversampling},
+                                                        resampled_trace_length{trace_length / oversampling},
+                                                        resampled_total_length{total_length / oversampling},
+                                                        out_size{resampled_trace_length * resampled_trace_length},
+                                                        trace1_start{0},       // Start of the signal data
+                                                        trace2_start{len / 2}, // Start of the noise data
+                                                        pitch{len}             // Segment length in a buffer
 
 {
     downconversion_coeffs.resize(total_length, tcf(0.f));
     corr_downconversion_coeffs1.resize(resampled_total_length, tcf(0.f));
     corr_downconversion_coeffs2.resize(resampled_total_length, tcf(0.f));
-    firwin.resize(total_length, tcf(0.f)); // GPU memory for the filtering window
-    center_peak_win.resize(resampled_total_length, tcf(0.f));
-    corr_firwin1.resize(resampled_total_length, tcf(0.f));
-    corr_firwin2.resize(resampled_total_length, tcf(0.f));
+    firwin.resize(total_length, tcf(1.f)); // GPU memory for the filtering window
     average_data.resize(resampled_total_length, tcf(0.f));
     average_noise.resize(resampled_total_length, tcf(0.f));
     subtraction_data.resize(resampled_total_length, tcf(0.f));
@@ -74,17 +72,6 @@ dsp::dsp(size_t len, uint64_t n, double part,
         noise[i].resize(total_length, tcf(0.f));
         noise_resampled[i].resize(resampled_total_length, tcf(0.f));
 
-        data_sideband1[i].resize(resampled_total_length, tcf(0.f));
-        data_sideband2[i].resize(resampled_total_length, tcf(0.f));
-        data_tmp[i].resize(resampled_total_length, tcf(0.f)); // Used internally in calculatePSD
-
-        noise_sideband1[i].resize(resampled_total_length, tcf(0.f));
-        noise_sideband2[i].resize(resampled_total_length, tcf(0.f));
-        noise_tmp[i].resize(resampled_total_length, tcf(0.f)); // Used internally in calculatePSD
-
-        data_central_peak[i].resize(resampled_total_length, tcf(0.f));
-        noise_central_peak[i].resize(resampled_total_length, tcf(0.f));
-
         interference_out[i].resize(resampled_total_length, tcf(0.f));
 
         g1_filt[i].resize(out_size, tcf(0.f));
@@ -98,17 +85,6 @@ dsp::dsp(size_t len, uint64_t n, double part,
 
         g2_filt[i].resize(out_size, tcf(0.f));
         g2_filt_cross_segment[i].resize(out_size, 0.f);
-
-        // For storing PSD results
-        PSD_sideband1[i].resize(resampled_total_length, 0.f);
-        PSD_sideband2[i].resize(resampled_total_length, 0.f);
-        PSD_rayleigh[i].resize(resampled_total_length, 0.f);
-        PSD_total[i].resize(resampled_total_length, 0.f);
-        PSD_sidebands_product[i].resize(resampled_total_length, 0.f);
-
-        // Used to temporarily store the sidebands product
-        data_product[i].resize(resampled_total_length, tcf(0.f));
-        noise_product[i].resize(resampled_total_length, tcf(0.f));
 
         power_short[i].resize(resampled_total_length - resampled_trace_length, 0.f);
 
@@ -134,7 +110,9 @@ dsp::dsp(size_t len, uint64_t n, double part,
         check_cublas_error(cublasSetStream(*cublas_handles[i], streams[i]),
                            "Error assigning a stream to a cuBLAS handle\n");
 
-        // modules[i] = std::make_unique<sidebands_module>(resampled_trace_length, batch_size, plans_resampled[i], streams[i]);
+        modules[i] = std::make_unique<sidebands_module>(resampled_trace_length, batch_size,
+                                                        samplerate / static_cast<float>(second_oversampling),
+                                                        plans_resampled[i], streams[i]);
     }
 }
 
@@ -184,9 +162,9 @@ void dsp::streamDeleter(cudaStream_t *ptr)
 }
 
 // Set filtering window for digital processing
-void dsp::setFirwin(float cutoff_l, float cutoff_r, int dig_oversampling)
+void dsp::setFirwin(float cutoff_l, float cutoff_r)
 {
-    makeFilterWindow(cutoff_l, cutoff_r, firwin, trace_length, total_length, dig_oversampling);
+    makeFilterWindow(cutoff_l, cutoff_r, firwin, trace_length, total_length, samplerate);
 }
 
 void dsp::setFirwin(hostvec_c window)
@@ -194,46 +172,13 @@ void dsp::setFirwin(hostvec_c window)
     firwin = window;
 }
 
-void dsp::setCentralPeakWin(float cutoff_l, float cutoff_r, int dig_oversampling)
-{
-    makeFilterWindow(cutoff_l, cutoff_r, center_peak_win, resampled_trace_length, resampled_total_length, dig_oversampling * oversampling);
-}
-
-void dsp::setCentralPeakWin(hostvec_c window)
-{
-    center_peak_win = window;
-}
-
-// Set filtering window for digital processing before G2 calculations
-void dsp::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int dig_oversampling)
-{
-    makeFilterWindow(cutoff_1.first, cutoff_1.second, corr_firwin1, resampled_trace_length, resampled_total_length, dig_oversampling * oversampling);
-    makeFilterWindow(cutoff_2.first, cutoff_2.second, corr_firwin2, resampled_trace_length, resampled_total_length, dig_oversampling * oversampling);
-}
-
-void dsp::setCorrelationFirwin(hostvec_c window1, hostvec_c window2)
-{
-    corr_firwin1 = window1;
-    corr_firwin2 = window2;
-}
-
-std::vector<hostvec_c> dsp::getAllFirwins()
-{
-    std::vector<hostvec_c> filters(4);
-    filters[0] = firwin;
-    filters[1] = corr_firwin1;
-    filters[2] = corr_firwin2;
-    filters[3] = center_peak_win;
-    return filters;
-}
-
 // Creates a rectangular window with specified cutoff frequencies for the further usage in a filter
 // Frequencies in MHz
-void dsp::makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, size_t trace_len, size_t total_len, int oversamp)
+void dsp::makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, size_t trace_len, size_t total_len, float samplerate)
 {
     using namespace std::complex_literals;
     hostvec_c hFirwin(total_len);
-    float fs = 1250.f / (float)oversamp;
+    float fs = samplerate * 1e-6;
     int l_idx = (int)std::roundf((float)trace_len / fs * cutoff_l);
     int r_idx = (int)std::roundf((float)trace_len / fs * cutoff_r);
     for (int i = 0; i < total_len; i++)
@@ -354,29 +299,10 @@ void dsp::resetOutput()
 
         thrust::fill(g1_without_cp[i].begin(), g1_without_cp[i].end(), tcf(0));
         thrust::fill(g1_without_cp_cross_segment[i].begin(), g1_without_cp_cross_segment[i].end(), tcf(0));
-
-        thrust::fill(data_sideband1[i].begin(), data_sideband1[i].end(), tcf(0));
-        thrust::fill(data_sideband2[i].begin(), data_sideband2[i].end(), tcf(0));
-        thrust::fill(data_tmp[i].begin(), data_tmp[i].end(), tcf(0));
-
-        thrust::fill(noise_sideband1[i].begin(), noise_sideband1[i].end(), tcf(0));
-        thrust::fill(noise_sideband2[i].begin(), noise_sideband2[i].end(), tcf(0));
-        thrust::fill(noise_tmp[i].begin(), noise_tmp[i].end(), tcf(0));
-
-        thrust::fill(PSD_sideband1[i].begin(), PSD_sideband1[i].end(), 0);
-        thrust::fill(PSD_sideband2[i].begin(), PSD_sideband2[i].end(), 0);
-        thrust::fill(PSD_rayleigh[i].begin(), PSD_rayleigh[i].end(), 0);
-        thrust::fill(PSD_total[i].begin(), PSD_total[i].end(), 0);
-        thrust::fill(PSD_sidebands_product[i].begin(), PSD_sidebands_product[i].end(), 0);
-
-        thrust::fill(data_product[i].begin(), data_product[i].end(), tcf(0.f));
-        thrust::fill(noise_product[i].begin(), noise_product[i].end(), tcf(0.f));
+        modules[i]->reset();
         thrust::fill(power_short[i].begin(), power_short[i].end(), 0);
 
         thrust::fill(interference_out[i].begin(), interference_out[i].end(), tcf(0));
-
-        thrust::fill(data_central_peak[i].begin(), data_central_peak[i].end(), tcf(0));
-        thrust::fill(noise_central_peak[i].begin(), noise_central_peak[i].end(), tcf(0));
     }
 }
 
@@ -406,42 +332,7 @@ void dsp::compute(const hostbuf buffer_ptr)
     resample(data[stream_num], data_resampled[stream_num], streams[stream_num]);
     resample(noise[stream_num], noise_resampled[stream_num], streams[stream_num]);
 
-    // PSD for the whole trace
-    calculatePSD(data_resampled[stream_num], noise_resampled[stream_num], PSD_total[stream_num], stream_num);
-
-    // Left sideband
-    extractSideband(data_resampled[stream_num], data_sideband1[stream_num], corr_firwin1, stream_num);
-    extractSideband(noise_resampled[stream_num], noise_sideband1[stream_num], corr_firwin1, stream_num);
-    calculatePSD(data_sideband1[stream_num], noise_sideband1[stream_num], PSD_sideband1[stream_num], stream_num);
-
-    // Right sideband
-    extractSideband(data_resampled[stream_num], data_sideband2[stream_num], corr_firwin2, stream_num);
-    extractSideband(noise_resampled[stream_num], noise_sideband2[stream_num], corr_firwin2, stream_num);
-    calculatePSD(data_sideband2[stream_num], noise_sideband2[stream_num], PSD_sideband2[stream_num], stream_num);
-
-    // Central rayleigh peak
-    extractSideband(data_resampled[stream_num], data_central_peak[stream_num], center_peak_win, stream_num);
-    extractSideband(noise_resampled[stream_num], noise_central_peak[stream_num], center_peak_win, stream_num);
-    calculatePSD(data_central_peak[stream_num], noise_central_peak[stream_num], PSD_rayleigh[stream_num], stream_num);
-
-    // Photons from two sidebands
-    calculateSidebandsProductPSD(data_sideband1[stream_num],
-                                 data_sideband2[stream_num],
-                                 noise_sideband1[stream_num],
-                                 noise_sideband2[stream_num],
-                                 PSD_sidebands_product[stream_num],
-                                 stream_num);
-}
-
-void dsp::copyData(gpuvec_c &src, gpuvec_c &dst, cudaStream_t &stream)
-{
-    thrust::copy(thrust::cuda::par_nosync.on(stream), src.begin(), src.end(), dst.begin());
-}
-
-void dsp::extractSideband(gpuvec_c &src, gpuvec_c &dst, gpuvec_c &filterwin, int stream_num)
-{
-    copyData(src, dst, streams[stream_num]);
-    applyFilter(dst, filterwin, resampled_trace_length, streams[stream_num], plans_resampled[stream_num]);
+    modules[stream_num]->compute(data_resampled[stream_num], noise_resampled[stream_num]);
 }
 
 // This function uploads data from the specified section of a buffer array to the GPU memory
@@ -545,44 +436,11 @@ void dsp::normalize(gpuvec_c &data, float coeff, int stream_num)
                         data.size(), streamContexts[stream_num]);
 }
 
-void dsp::calculateSidebandsProductPSD(gpuvec_c &sideband1, gpuvec_c &sideband2,
-                                       gpuvec_c &noise1, gpuvec_c &noise2, gpuvec &psd,
-                                       int stream_num)
-{
-    calculateSignalsProduct(sideband1, sideband2, data_product[stream_num], streams[stream_num]);
-    calculateSignalsProduct(noise1, noise2, noise_product[stream_num], streams[stream_num]);
-    calculatePSD(data_product[stream_num], noise_product[stream_num], psd, stream_num);
-}
-
-void dsp::calculateSignalsProduct(gpuvec_c &data1, gpuvec_c &data2, gpuvec_c &output, cudaStream_t &stream)
-{
-    thrust::transform(thrust::cuda::par_nosync.on(stream), data1.begin(), data1.end(), data2.begin(), output.begin(), thrust::multiplies<tcf>());
-}
-
 void dsp::calculatePower(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, cudaStream_t &stream)
 {
     thrust::for_each(thrust::cuda::par_nosync.on(stream),
                      thrust::make_zip_iterator(data.begin(), noise.begin(), output.begin()),
                      thrust::make_zip_iterator(data.end(), noise.end(), output.end()),
-                     thrust::make_zip_function(power_functor()));
-}
-
-void dsp::calculatePSD(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, int stream_num)
-{
-    // cufftHandle &plan = *plans_resampled[stream_num];
-    cufftComplex *cufft_data_src = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(data.data()));
-    cufftComplex *cufft_data_dst = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(data_tmp[stream_num].data()));
-    auto cufftstat_d = cufftExecC2C(plans_resampled[stream_num], cufft_data_src, cufft_data_dst, CUFFT_FORWARD);
-    check_cufft_error(cufftstat_d, "Error executing cufft");
-
-    cufftComplex *cufft_noise_src = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(noise.data()));
-    cufftComplex *cufft_noise_dst = reinterpret_cast<cufftComplex *>(thrust::raw_pointer_cast(noise_tmp[stream_num].data()));
-    auto cufftstat_n = cufftExecC2C(plans_resampled[stream_num], cufft_noise_src, cufft_noise_dst, CUFFT_FORWARD);
-    check_cufft_error(cufftstat_n, "Error executing cufft");
-
-    thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
-                     thrust::make_zip_iterator(data_tmp[stream_num].begin(), noise_tmp[stream_num].begin(), output.begin()),
-                     thrust::make_zip_iterator(data_tmp[stream_num].end(), noise_tmp[stream_num].end(), output.end()),
                      thrust::make_zip_function(power_functor()));
 }
 
@@ -803,13 +661,48 @@ std::pair<hostvec_c, hostvec> dsp::getG2FilteredResult()
     return std::make_pair(h_g2_filt, h_g2_filt_cross_segment);
 }
 
-std::tuple<hostvec, hostvec, hostvec, hostvec, hostvec> dsp::getPSDResults()
+std::vector<hostvec> dsp::getRealResults()
 {
-    return {getCumulativeTrace(PSD_sideband1, batch_size),
-            getCumulativeTrace(PSD_sideband2, batch_size),
-            getCumulativeTrace(PSD_rayleigh, batch_size),
-            getCumulativeTrace(PSD_total, batch_size),
-            getCumulativeTrace(PSD_sidebands_product, batch_size)};
+    std::vector<hostvec> results;
+    for (int i = 0; i < num_streams; i++)
+    {
+        auto stream_results = modules[i]->getRealResults();
+        if (stream_results.empty())
+            throw std::runtime_error("No real-valued results returned");
+        if (i == 0)
+            results.insert(results.end(), stream_results.begin(), stream_results.end());
+        else
+            for (int j = 0; j < stream_results.size(); j++)
+                thrust::transform(stream_results[j].begin(),
+                                  stream_results[j].end(),
+                                  results[j].begin(),
+                                  results[j].begin(), thrust::plus<float>());
+    }
+    for (int j = 0; j < results.size(); j++)
+        divideBy(results[j], static_cast<float>(num_streams));
+    return results;
+}
+
+std::vector<hostvec_c> dsp::getComplexResults()
+{
+    std::vector<hostvec_c> results;
+    for (int i = 0; i < num_streams; i++)
+    {
+        auto stream_results = modules[i]->getComplexResults();
+        if (stream_results.empty())
+            throw std::runtime_error("No complex-valued results returned");
+        if (i == 0)
+            results.insert(results.end(), stream_results.begin(), stream_results.end());
+        else
+            for (int j = 0; j < stream_results.size(); j++)
+                thrust::transform(stream_results[j].begin(),
+                                  stream_results[j].end(),
+                                  results[j].begin(),
+                                  results[j].begin(), thrust::plus<tcf>());
+    }
+    for (int j = 0; j < results.size(); j++)
+        divideBy(results[j], tcf(static_cast<float>(num_streams)));
+    return results;
 }
 
 hostvec_c dsp::getInterferenceResult()

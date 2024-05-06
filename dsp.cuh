@@ -40,14 +40,6 @@ class dsp
     gpuvec_c noise_resampled[num_streams];
     gpuvec_c subtraction_data;
     gpuvec_c subtraction_noise;
-    gpuvec_c data_sideband1[num_streams];
-    gpuvec_c data_sideband2[num_streams];
-    gpuvec_c data_tmp[num_streams];
-    gpuvec_c noise_sideband1[num_streams];
-    gpuvec_c noise_sideband2[num_streams];
-    gpuvec_c noise_tmp[num_streams];
-    gpuvec_c data_central_peak[num_streams];
-    gpuvec_c noise_central_peak[num_streams];
 
     gpuvec_c interference_out[num_streams];
     gpuvec_c g1_filt[num_streams];
@@ -59,21 +51,10 @@ class dsp
     gpuvec_c g2_filt[num_streams];
     gpuvec g2_filt_cross_segment[num_streams];
 
-    gpuvec PSD_sideband1[num_streams];
-    gpuvec PSD_sideband2[num_streams];
-    gpuvec PSD_rayleigh[num_streams];
-    gpuvec PSD_total[num_streams];
-    gpuvec PSD_sidebands_product[num_streams];
-
     gpuvec power_short[num_streams];
-    gpuvec_c data_product[num_streams];
-    gpuvec_c noise_product[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
-    gpuvec_c center_peak_win;
-    gpuvec_c corr_firwin1;
-    gpuvec_c corr_firwin2;
 
     /* Average traces */
     gpuvec_c average_data;
@@ -99,6 +80,7 @@ private:
     size_t out_size;
     int semaphore = 0;           // for selecting the current stream
     float scale = 500.f / 128.f; // for conversion into mV // max int8 is 127
+    float samplerate;
 
     const cuComplex alpha_c = make_cuComplex(1, 0);
     const cuComplex beta_data_c = make_cuComplex(1, 0);
@@ -129,7 +111,7 @@ private:
     float a_qi, a_qq, c_i, c_q;
 
 public:
-    dsp(size_t len, uint64_t n, double part, double samplerate, int second_oversampling);
+    dsp(size_t len, uint64_t n, double part, double sample_rate, int second_oversampling);
 
     ~dsp();
 
@@ -149,16 +131,16 @@ public:
         return resampled_total_length;
     }
 
-    void setFirwin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
+    void setFirwin(float cutoff_l, float cutoff_r);
     void setFirwin(hostvec_c window);
 
-    void setCentralPeakWin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
-    void setCentralPeakWin(hostvec_c window);
+    void setAdditionalFilters(std::vector<std::pair<float, float>> &cutoffs)
+    {
+        for (auto &module : modules)
+            module->set_filter_cutoffs(cutoffs);
+    }
 
-    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int dig_oversampling = 1);
-    void setCorrelationFirwin(hostvec_c window1, hostvec_c window2);
-
-    void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, size_t trace_len, size_t total_len, int oversampling = 1);
+    static void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, size_t trace_len, size_t total_len, float samplerate);
 
     void resetOutput();
 
@@ -174,7 +156,9 @@ public:
 
     std::pair<hostvec_c, hostvec> getG2FilteredResult();
 
-    std::tuple<hostvec, hostvec, hostvec, hostvec, hostvec> getPSDResults();
+    std::vector<hostvec> getRealResults();
+
+    std::vector<hostvec_c> getComplexResults();
 
     hostvec_c getInterferenceResult();
 
@@ -198,7 +182,7 @@ public:
 
     void setAmplitude(int ampl);
 
-    std::vector<hostvec_c> getAllFirwins();
+    // std::vector<hostvec_c> getAllFirwins();
 
     template <typename T>
     static thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces, size_t batch_size);
@@ -235,23 +219,11 @@ protected:
 
     void subtractDataFromOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
 
-    void extractSideband(gpuvec_c &src, gpuvec_c &dst, gpuvec_c &filterwin, int stream_num);
-
-    void copyData(gpuvec_c &source, gpuvec_c &dist, cudaStream_t &stream);
-
     void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
 
     void normalize(gpuvec_c &data, float coeff, int stream_num);
 
     void calculatePower(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, cudaStream_t &stream);
-
-    void calculatePSD(gpuvec_c &data, gpuvec_c &noise, gpuvec &output, int stream_num);
-
-    void calculateSignalsProduct(gpuvec_c &data1, gpuvec_c &data2, gpuvec_c &output, cudaStream_t &stream);
-
-    void calculateSidebandsProductPSD(gpuvec_c &sideband1, gpuvec_c &sideband2,
-                                      gpuvec_c &noise1, gpuvec_c &noise2, gpuvec &psd,
-                                      int stream_num);
 
     void calculateG1(gpuvec_c &data1, gpuvec_c &data2, gpuvec_c &noise1, gpuvec_c &noise2, gpuvec_c &output, cublasHandle_t &handle, cublasOperation_t &op);
 
