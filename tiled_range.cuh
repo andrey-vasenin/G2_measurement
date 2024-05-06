@@ -1,3 +1,6 @@
+#pragma once
+#ifndef TILED_RANGE_H
+#define TILED_RANGE_H
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
@@ -57,3 +60,4 @@ protected:
     Iterator last;
     difference_type tiles;
 };
+#endif // TILED_RANGE_H

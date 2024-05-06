@@ -187,7 +187,6 @@ void Digitizer::prepareFifo(uint32 notifysize)
     spcm_dwDefTransfer_i64(handle, SPCM_BUF_DATA, SPCM_DIR_CARDTOPC, notifysize,
                            &buffer[0], 0, buffersize);
     this->handleError();
-
     spcm_dwSetParam_i32(handle, SPC_M2CMD, M2CMD_CARD_START | M2CMD_CARD_ENABLETRIGGER | M2CMD_DATA_STARTDMA);
     this->handleError();
 }

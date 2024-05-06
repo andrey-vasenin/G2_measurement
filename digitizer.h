@@ -1,16 +1,16 @@
 ﻿//
 // Created by andrei on 3/26/21.
 //
-
-#ifndef CPPMEASUREMENT_DIGITIZER_H
-#define CPPMEASUREMENT_DIGITIZER_H
+#pragma once
+#ifndef DIGITIZER_H
+#define DIGITIZER_H
 
 #include <vector>
 #include <functional>
 #include <ostream>
 #include "dlltyp.h"
 #include "regs.h"
-#include "dsp.cuh"
+// #include "dsp.cuh"
 
 typedef std::function<void(int8_t *)> proc_t;
 
@@ -95,5 +95,4 @@ public:
 
     int64_t getTriggerCounter();
 };
-
-#endif // CPPMEASUREMENT_DIGITIZER_H
+#endif // DIGITIZER_H

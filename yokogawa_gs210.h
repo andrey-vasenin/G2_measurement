@@ -1,4 +1,6 @@
 #pragma once
+#ifndef YOKOGAWA_GS210_H
+#define YOKOGAWA_GS210_H
 #include "visa.h"
 #include <string>
 
@@ -21,3 +23,4 @@ private:
 	double read_double(const char *);
 	std::string read_string(const char *);
 };
+#endif // YOKOGAWA_GS210_H

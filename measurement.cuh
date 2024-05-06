@@ -1,8 +1,9 @@
 ﻿//
 // Created by andrei on 4/13/21.
 //
-#ifndef SPECTRUMEXTENSION_MEASUREMENT_H
-#define SPECTRUMEXTENSION_MEASUREMENT_H
+#pragma once
+#ifndef MEASUREMENT_H
+#define MEASUREMENT_H
 
 #include <vector>
 #include <memory>
@@ -15,16 +16,17 @@
 
 // namespace py = pybind11;
 
-using corr_t = std::vector<std::vector<std::complex<double>>>;
-using trace_t = std::vector<std::complex<double>>;
-
+using corr_c = std::vector<std::vector<std::complex<double>>>;
+using trace_c = std::vector<std::complex<double>>;
+using corr_r = std::vector<std::vector<double>>;
+using trace_r = std::vector<double>;
 
 class Measurement
 {
 private:
-    Digitizer *dig;
-    yokogawa_gs210 *coil;
-    dsp *processor;
+    std::unique_ptr<yokogawa_gs210> coil;
+    std::unique_ptr<Digitizer> dig;
+    std::unique_ptr<dsp> processor;
     size_t segment_size;
     uint64_t segments_count;
     uint64_t batch_size;
@@ -50,14 +52,14 @@ public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
                 int second_oversampling, const char *coil_address);
 
-    Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+    Measurement(std::unique_ptr<Digitizer> dig_, uint64_t averages, uint64_t batch, double part,
                 int second_oversampling, const char *coil_address);
 
     Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
                 int second_oversampling);
-    
+
     void setDigParameters();
-                
+
     void setAmplitude(int ampl);
 
     void setCurrents(float wc, float oc);
@@ -72,7 +74,7 @@ public:
 
     void free();
 
-    void setCalibration(int line_num, float r, float phi, float offset_i, float offset_q);
+    void setCalibration(float r, float phi, float offset_i, float offset_q);
 
     void setFirwin(float left_cutoff, float right_cutoff);
     void setFirwin(const stdvec_c window);
@@ -97,37 +99,40 @@ public:
 
     void setTestInput(const std::vector<int8_t> &input);
 
-    corr_t getG1Correlator();
+    std::pair<corr_c, corr_c> getG1Filt();
 
-    corr_t getG1FiltCorrelator();
+    std::pair<corr_c, corr_c> getG1FiltConj();
 
-    corr_t getG1FiltConjCorrelator();
-  
-    corr_t getG2Correlator();
+    std::pair<corr_c, corr_c> getG1WithoutCP();
 
-    corr_t getG2CrossSegmentCorrelator();
+    std::pair<corr_c, corr_r> getG2Filt();
 
-    corr_t getG2FilteredCorrelator();
+    std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> getPSD();
 
-    corr_t getG2FilteredCrossSegmentCorrelator();
+    stdvec_c getInterference();
 
-    stdvec_c getInterferenceResult();
-
-    std::vector<stdvec_c> getSubtractionData();
-
-    stdvec_c getRawG2();
+    std::vector<stdvec_c> getAverageData();
 
     void setSubtractionTrace(std::vector<stdvec_c> trace);
 
     std::vector<stdvec_c> getSubtractionTrace();
 
-    int getTotalLength() { return processor->getTotalLength(); }
+    int getTotalLength() { return processor->getTotalLength(); };
 
-    int getTraceLength() { return processor->getTraceLength(); }
+    int getTraceLength() { return processor->getTraceLength(); };
 
-    int getOutSize() { return processor->getOutSize(); }
+    int getOutSize() { return processor->getOutSize(); };
 
-    size_t getNotifySize() { return notify_size; }
+    size_t getNotifySize() { return notify_size; };
+
+    std::vector<std::vector<std::complex<float>>> getFirwins()
+    {
+        auto firwins = processor->getAllFirwins();
+        std::vector<std::vector<std::complex<float>>> result(4);
+        for (int i = 0; i < 4; i++)
+            result[i] = std::vector<std::complex<float>>(firwins[i].begin(), firwins[i].end());
+        return result;
+    };
 
 protected:
     void initializeBuffer();
@@ -138,5 +143,4 @@ protected:
     template <template <typename, typename...> class Container, typename T, typename... Args>
     thrust::host_vector<T> tile(const Container<T, Args...> &data, size_t N);
 };
-
-#endif // SPECTRUMEXTENSION_MEASUREMENT_H
+#endif // MEASUREMENT_H

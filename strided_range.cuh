@@ -1,3 +1,6 @@
+#pragma once
+#ifndef STRIDED_RANGE_H
+#define STRIDED_RANGE_H
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
@@ -51,3 +54,4 @@ protected:
     Iterator last;
     difference_type stride;
 };
+#endif // STRIDED_RANGE_H

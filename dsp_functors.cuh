@@ -36,12 +36,9 @@ struct millivolts_functor
 
     millivolts_functor(float s) : scale(s) {}
 
-    __device__ inline void operator()(const char4 &b, tcf &d1, tcf &d2)
+    __device__ inline tcf operator()(const char2 &b)
     {
-        d1.real(static_cast<float>(b.x) * scale);
-        d1.imag(static_cast<float>(b.y) * scale);
-        d2.real(static_cast<float>(b.z) * scale);
-        d2.imag(static_cast<float>(b.w) * scale);
+        return tcf(static_cast<float>(b.x), static_cast<float>(b.y)) * scale;
     }
 };
 

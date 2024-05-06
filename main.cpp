@@ -13,31 +13,31 @@ int main()
     using std::chrono::high_resolution_clock;
     using std::chrono::microseconds;
 
-    double part = 1;
-    int second_oversampling = 2;
+    double part = 0.5;
+    int second_oversampling = 1;
     try {
-        auto dig = new Digitizer("/dev/spcm1");
+        auto dig = std::make_unique<Digitizer>("/dev/spcm1");
         if (dig) { // Check if dig is not null
-            int channels[] = {0, 1, 2, 3};
-            int amps[] = {1000, 1000, 1000, 1000};
+            int channels[] = {0, 1};
+            int amps[] = {1000, 1000};
 
-            dig->setupChannels(channels, amps, 4);
+            dig->setupChannels(channels, amps, 2);
 
             dig->setSamplingRate(1250000000 / 4);
             dig->setExt0TriggerOnPositiveEdge(1000);
             // dig->setupMultRecFifoMode(800, 32, 0);
-            // dig->autoTrigger();
+            dig->autoTrigger();
             dig->setupSingleRecFifoMode(32);
             dig->setSegmentSize(800);
         }
         auto avg = 1 << 22;
         auto batch_size = 1 << 11;
         auto num_iter = int(avg / batch_size);
-        auto mes = std::make_unique<Measurement>(dig, avg, batch_size, part, second_oversampling, "yok1");
+        auto mes = std::make_unique<Measurement>(std::move(dig), avg, batch_size, part, second_oversampling, "yok1");
         mes->setFirwin(1, 99);
         mes->setIntermediateFrequency(0.05f);
-        mes->setCalibration(0, 1, 0, 0, 0);
-        mes->setCalibration(1, 1, 0, 0, 0);
+        mes->setCalibration(1, 0, 0, 0);
+        mes->setCalibration(1, 0, 0, 0);
         mes->setAmplitude(100);
         mes->setCurrents(0, 0);
         std::pair<float, float> firwin_l (1, 99);
@@ -52,29 +52,23 @@ int main()
         std::cout << "Measurement duration: " << dur.count() << " mcs\n";
         auto one_iter_dur = dur / num_iter;
         std::cout << "One iteration duration: " << one_iter_dur.count() << " mcs\n";
-        auto sd = mes->getSubtractionData();
+        auto sd = mes->getAverageData();
         mes->setSubtractionTrace(sd);
         auto st = mes->getSubtractionTrace();
         tcf a = st[0][0];
         tcf b = sd[0][0];
-        // std::cout << a << ' ' << b << std::endl;
-        // auto g2 = mes->getG2Correlator();
-        // auto g2_cross = mes->getG2CrossSegmentCorrelator();
-        auto g2_filt = mes->getG2FilteredCorrelator();
-        auto g2_filt_cross = mes->getG2FilteredCrossSegmentCorrelator();
-        auto g1 = mes->getG1Correlator();
-        auto g1_filt = mes->getG1FiltCorrelator();
-        auto g1_filt_conj = mes->getG1FiltConjCorrelator();
-        auto inter = mes->getInterferenceResult();
+        std::cout << a - b << std::endl;
+        auto g1_filt = mes->getG1Filt();
+        auto g1_filt_conj = mes->getG1FiltConj();
+        auto g2_filt = mes->getG2Filt();
+        auto inter = mes->getInterference();
+        auto psd = mes->getPSD();
 
-        // std::cout << g2[0][0] << std::endl;
-        // std::cout << g2_cross[0][0] << std::endl;
-        std::cout << g2_filt[0][0] << std::endl;
-        std::cout << g2_filt_cross[0][0] << std::endl;
-        std::cout << g1[0][0] << std::endl;
-        std::cout << g1_filt[0][0] << std::endl;
-        std::cout << g1_filt_conj[0][0] << std::endl;
-        std::cout << inter[0] << std::endl;
+        std::cout <<"g1 filtered: " << g1_filt.first[0][0] << ' ' << g1_filt.second[0][0] << std::endl;
+        std::cout <<"g1 filtered conj: " << g1_filt_conj.first[0][0] << ' ' << g1_filt_conj.second[0][0] << std::endl;
+        std::cout <<"g2 filtered: " << g2_filt.first[0][0] << ' ' << g2_filt.second[0][0] << std::endl;
+        std::cout <<"interference: " << inter[0] << std::endl;
+        std::cout <<"psd :" << std::get<0>(psd)[0] << ' ' << std::get<1>(psd)[0] << ' ' << std::get<2>(psd)[0] << std::endl;
 
     }
     catch (const std::runtime_error& e) {

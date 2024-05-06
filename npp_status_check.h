@@ -1,3 +1,6 @@
+#pragma once
+#ifndef NPP_STATUS_CHECK_H
+#define NPP_STATUS_CHECK_H
 #include <string>
 #include <nppdefs.h>
 
@@ -138,3 +141,5 @@ std::string NppStatusToString(NppStatus status) {
       return "Unknown status";
   }
 }
+
+#endif // NPP_STATUS_CHECK_H

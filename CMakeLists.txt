@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(g2_measurement LANGUAGES CXX CUDA)
+project(filtered_psd2 LANGUAGES CXX CUDA)
 
 # Set the C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -42,13 +42,13 @@ file(GLOB CUDA_SOURCES *.cu)
 file(GLOB CUDA_HEADERS *.cuh)
 
 # Link the libraries to your target (assuming your target is named 'MyCudaProject')
-add_executable(${PROJECT_NAME} main.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu)
-target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY})
-target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
-
-
-# pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu )
-# target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
-# target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
+# add_executable(${PROJECT_NAME} main.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu)
+# target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR})
+# target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY})
 # target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
+
+
+pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu )
+target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
+target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
+target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")

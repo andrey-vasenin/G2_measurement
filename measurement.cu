@@ -20,14 +20,12 @@
 #include <future>
 #include <thread>
 
-
-
-Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+Measurement::Measurement(std::unique_ptr<Digitizer> dig_, uint64_t averages, uint64_t batch, double part,
                          int second_oversampling, const char *coil_address)
 {
-    dig = dig_;
+    dig = std::move(dig_);
     sampling_rate = static_cast<double>(dig->getSamplingRate());
-    coil = new yokogawa_gs210(coil_address);
+    coil = std::make_unique<yokogawa_gs210>(coil_address);
     segment_size = dig->getSegmentSize();
     batch_size = batch;
     second_ovs = second_oversampling;
@@ -35,7 +33,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     notify_size = 2 * num_channels * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000); // ms
-    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
+    processor = std::make_unique<dsp>(segment_size, batch_size, part, sampling_rate, second_oversampling);
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -56,28 +54,27 @@ void Measurement::setDigParameters()
     dig->setSamplingRate(1250000000 / 4);
     dig->setupSingleRecFifoMode(32);
     dig->setSegmentSize(800);
-
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
                          int second_oversampling, const char *coil_address)
-    : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
+    : Measurement(std::make_unique<Digitizer>(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
                   second_oversampling, coil_address)
 {
 }
 
 // Constructor for test measurement
 Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
-                int second_oversampling)
+                         int second_oversampling)
 {
     dig = nullptr;
     batch_size = batch;
     second_ovs = second_oversampling;
     segment_size = segment;
-    sampling_rate = 1.25E+9/dig_oversampling;
+    sampling_rate = 1.25E+9 / dig_oversampling;
     setAveragesNumber(averages);
     notify_size = 2 * num_channels * segment_size * batch_size;
-    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
+    processor = std::make_unique<dsp>(segment_size, batch_size, part, sampling_rate, second_oversampling);
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -89,16 +86,15 @@ Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double
 
 Measurement::~Measurement()
 {
-    if ((processor != nullptr) || (dig != nullptr))
+    if (processor || dig)
         free();
 }
 
 void Measurement::free()
 {
-    delete processor;
-    delete dig;
-    processor = nullptr;
-    dig = nullptr;
+    processor.reset(); // Freeing up unique pointers
+    dig.reset();
+    coil.reset();
 }
 
 void Measurement::reset()
@@ -154,17 +150,17 @@ void Measurement::setAveragesNumber(uint64_t averages)
     iters_done = 0;
 }
 
-void Measurement::setCalibration(int line_num, float r, float phi, float offset_i, float offset_q)
+void Measurement::setCalibration(float r, float phi, float offset_i, float offset_q)
 {
-    processor->setDownConversionCalibrationParameters(line_num, r, phi, offset_i, offset_q);
+    processor->setDownConversionCalibrationParameters(r, phi, offset_i, offset_q);
 }
 
 void Measurement::setFirwin(float left_cutoff, float right_cutoff)
-{   
+{
     long sr = 0;
     if (dig != nullptr)
         sr = dig->getSamplingRate();
-    else 
+    else
         sr = sampling_rate;
     int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setFirwin(left_cutoff, right_cutoff, oversampling);
@@ -178,11 +174,11 @@ void Measurement::setFirwin(const stdvec_c window)
 }
 
 void Measurement::setCentralPeakWin(float left_cutoff, float right_cutoff)
-{   
+{
     long sr = 0;
     if (dig != nullptr)
         sr = dig->getSamplingRate();
-    else 
+    else
         sr = sampling_rate;
     int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setCentralPeakWin(left_cutoff, right_cutoff, oversampling);
@@ -200,7 +196,7 @@ void Measurement::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pa
     long sr = 0;
     if (dig != nullptr)
         sr = dig->getSamplingRate();
-    else 
+    else
         sr = sampling_rate;
     int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
     processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
@@ -225,7 +221,7 @@ void Measurement::measure()
 void Measurement::asyncCurrentSwitch()
 {
     coil->set_current(working_current);
-    auto subtr_trace = getSubtractionData();
+    auto subtr_trace = getAverageData();
     resetOutput();
     setSubtractionTrace(subtr_trace);
     cudaDeviceSynchronize();
@@ -262,7 +258,7 @@ void Measurement::measureTest()
     for (uint32_t i = 0; i < iters_num; i++)
         func(test_input.data());
     iters_done += iters_num;
-    // std::cout << "iters done " << iters_done << std::endl; 
+    // std::cout << "iters done " << iters_done << std::endl;
 }
 
 void Measurement::setTestInput(const std::vector<int8_t> &input)
@@ -273,178 +269,132 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
     test_input = tile(input, batch_size);
 }
 
-corr_t Measurement::getG1Correlator()
+std::pair<corr_c, corr_c> Measurement::getG1Filt()
 {
     int side = processor->getResampledTraceLength();
 
-    corr_t avg_glr(side, trace_t(side));
-
-    // Receive data from GPU
-    auto corrs = processor->getG1CrossResult();
-    
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-    return avg_glr;
-}
-
-corr_t Measurement::getG1FiltCorrelator()
-{
-    int side = processor->getResampledTraceLength();
-
-    corr_t avg_glr(side, trace_t(side));
+    corr_c avg_1(side, trace_c(side));
+    corr_c avg_2(side, trace_c(side));
 
     // Receive data from GPU
     auto corrs = processor->getG1FiltResult();
-    
+
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-    return avg_glr;
+        {
+            avg_1[t1][t2] = std::complex<float>(corrs.first[t1 * side + t2] / X);
+            avg_2[t1][t2] = std::complex<float>(corrs.second[t1 * side + t2] / X);
+        }
+    return std::make_pair(avg_1, avg_2);
 }
 
-corr_t Measurement::getG1FiltConjCorrelator()
+std::pair<corr_c, corr_c> Measurement::getG1FiltConj()
 {
     int side = processor->getResampledTraceLength();
 
-    corr_t avg_glr(side, trace_t(side));
+    corr_c avg_1(side, trace_c(side));
+    corr_c avg_2(side, trace_c(side));
 
     // Receive data from GPU
     auto corrs = processor->getG1FiltConjResult();
-    
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-    return avg_glr;
-}
-
-corr_t Measurement::getG2Correlator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
-
-    // Receive data from GPU
-    auto result = processor->getG2FullResult();
 
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = 0; t2 < side; t2++)
         {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+            avg_1[t1][t2] = std::complex<float>(corrs.first[t1 * side + t2] / X);
+            avg_2[t1][t2] = std::complex<float>(corrs.second[t1 * side + t2] / X);
         }
-    return avg_g2;
+    return std::make_pair(avg_1, avg_2);
 }
 
-corr_t Measurement::getG2CrossSegmentCorrelator()
+std::pair<corr_c, corr_c> Measurement::getG1WithoutCP()
 {
     int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+
+    corr_c avg_1(side, trace_c(side));
+    corr_c avg_2(side, trace_c(side));
 
     // Receive data from GPU
-    auto result = processor->getG2CrossSegmentResult();
+    auto corrs = processor->getG1WithoutCPResult();
 
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = 0; t2 < side; t2++)
         {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+            avg_1[t1][t2] = std::complex<float>(corrs.first[t1 * side + t2] / X);
+            avg_2[t1][t2] = std::complex<float>(corrs.second[t1 * side + t2] / X);
         }
-    return avg_g2;
+    return std::make_pair(avg_1, avg_2);
 }
 
-corr_t Measurement::getG2FilteredCorrelator()
+std::pair<corr_c, corr_r> Measurement::getG2Filt()
 {
     int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+    corr_c avg_1(side, trace_c(side));
+    corr_r avg_2(side, trace_r(side));
 
     // Receive data from GPU
     auto result = processor->getG2FilteredResult();
 
     // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    float X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f);
 
     for (int t1 = 0; t1 < side; t1++)
         for (int t2 = 0; t2 < side; t2++)
         {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+            avg_1[t1][t2] = std::complex<float>(result.first[t1 * side + t2] / X);
+            avg_2[t1][t2] = float(result.second[t1 * side + t2] / X);
         }
-    return avg_g2;
+    return std::make_pair(avg_1, avg_2);
 }
 
-corr_t Measurement::getG2FilteredCrossSegmentCorrelator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
-
-    // Receive data from GPU
-    auto result = processor->getG2FilteredCrossSegmentResult();
-
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-        }
-    return avg_g2;
-}
-
-stdvec_c Measurement::getInterferenceResult()
+stdvec_c Measurement::getInterference()
 {
     int side = processor->getResampledTraceLength();
     stdvec_c avg_res(side);
 
-    auto result = processor->getInterferenceRsult();
+    auto result = processor->getInterferenceResult();
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
     for (int t1 = 0; t1 < side; t1++)
-        {
-            avg_res[t1] = std::complex<float>(result[t1] / X);
-        }
+    {
+        avg_res[t1] = std::complex<float>(result[t1] / X);
+    }
     return avg_res;
 }
 
-stdvec_c Measurement::getRawG2()
+std::tuple<stdvec, stdvec, stdvec, stdvec, stdvec> Measurement::getPSD()
 {
-    // Receive data from GPU
-    auto result = processor->getG2FullResult();
-
-    return stdvec_c(result.begin(), result.end());
+    auto result = processor->getPSDResults();
+    return {postprocess<float, float>(std::get<0>(result)),
+            postprocess<float, float>(std::get<1>(result)),
+            postprocess<float, float>(std::get<2>(result)),
+            postprocess<float, float>(std::get<3>(result)),
+            postprocess<float, float>(std::get<4>(result))};
 }
 
 void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
 {
-    hostvec_c average[num_channels];
-    for (int i = 0; i < num_channels; i++)
+    hostvec_c average[2];
+    for (int i = 0; i < 2; i++)
     {
         average[i] = trace[i];
     }
     processor->setSubtractionTrace(average);
 }
 
-// returns newly received data and saved like average_data 
-std::vector<stdvec_c> Measurement::getSubtractionData()
+// returns newly received data and saved like average_data
+std::vector<stdvec_c> Measurement::getAverageData()
 {
     std::vector<stdvec_c> subtr_data;
-    auto vec = processor->getCumulativeSubtrData();
-    for (int i = 0; i < num_channels; i++)
-    {
-        subtr_data.push_back(postprocess<tcf, std::complex<float>>(vec[i]));
-    }
-    
+    auto vec = processor->getAverageData();
+    subtr_data.push_back(postprocess<tcf, std::complex<float>>(vec.first));
+    subtr_data.push_back(postprocess<tcf, std::complex<float>>(vec.second));
+
     return subtr_data;
 }
 
