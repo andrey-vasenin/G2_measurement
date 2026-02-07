@@ -94,14 +94,30 @@ dsp::dsp(size_t len, uint64_t n, double part,
     corr_firwin1.resize(resampled_total_length, tcf(0.f));
     corr_firwin2.resize(resampled_total_length, tcf(0.f)); 
     subtraction_trace1.resize(resampled_total_length, tcf(0.f));
+    int device_id;
+    cudaGetDevice(&device_id);
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, device_id);
+    int major, minor;
+    cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device_id);
+    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device_id);
     // Allocate arrays on GPU for every stream
     for (int i = 0; i < num_streams; i++)
     {
         gpu_data_buf[i].resize(total_length, char4{0,0,0,0});
         // Create streams for parallel data processing
         handleError(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
-        check_npp_error(nppGetStreamContext(&streamContexts[i]), "Npp Error GetStreamContext");
+        // check_npp_error(initNppStreamContext(&streamContexts[i], streams[i]), "Npp Error GetStreamContext");
+        streamContexts[i].nCudaDeviceId = device_id;
+        streamContexts[i].nMultiProcessorCount = prop.multiProcessorCount;
+        streamContexts[i].nMaxThreadsPerMultiProcessor = prop.maxThreadsPerMultiProcessor;
+        streamContexts[i].nMaxThreadsPerBlock = prop.maxThreadsPerBlock;
+        streamContexts[i].nSharedMemPerBlock = prop.sharedMemPerBlock;
+        streamContexts[i].nCudaDevAttrComputeCapabilityMajor = major;
+        streamContexts[i].nCudaDevAttrComputeCapabilityMinor = minor;
         streamContexts[i].hStream = streams[i];
+        cudaStreamGetFlags(streams[i], &streamContexts[i].nStreamFlags);
+
 
         // Allocate arrays on GPU for every channel of digitizer
         data1[i].resize(total_length, tcf(0.f));
@@ -117,8 +133,8 @@ dsp::dsp(size_t len, uint64_t n, double part,
 
         data_without_central_peak1[i].resize(resampled_total_length, tcf(0.f));
         data_without_central_peak2[i].resize(resampled_total_length, tcf(0.f));
-
-        interference_out[i].resize(resampled_total_length, tcf(0.f));
+        
+        // trace_out[i].resize(resampled_total_length, tcf(0.f));
 
         g1_cross_out[i].resize(out_size, tcf(0.f));
         g1_filt_conj[i].resize(out_size, tcf(0.f));
@@ -255,11 +271,12 @@ void dsp::setIntermediateFrequency(float frequency, int oversampling)
 {
     const float pi = std::acos(-1.f);
     float ovs = static_cast<float>(oversampling);
+    const int trace_len = static_cast<int>(trace_length);
     hostvec_c hDownConv(total_length);
     thrust::tabulate(hDownConv.begin(), hDownConv.end(),
-                     [=] __host__(int i) -> tcf
+                     [pi, ovs, frequency, trace_len] __host__(int i) -> tcf
                      {
-                         float t = 0.8f * ovs * static_cast<float>(i % trace_length);
+                         float t = 0.8f * ovs * static_cast<float>(i % trace_len);
                          return thrust::exp(tcf(0.f, -2.f * pi * frequency * t));
                      });
     downconversion_coeffs = hDownConv;
@@ -269,20 +286,21 @@ void dsp::setCorrDowncovertCoeffs(float freq1, float freq2, int oversampling)
 {
     const float pi = std::acos(-1.f);
     float ovs = static_cast<float>(oversampling);
+    const int resampled_trace_len = static_cast<int>(resampled_trace_length);
     hostvec_c hDownConv(resampled_total_length);
     thrust::tabulate(hDownConv.begin(), hDownConv.end(),
-                     [=] __host__(int i) -> tcf
+                     [pi, ovs, freq1, resampled_trace_len] __host__(int i) -> tcf
                      {
-                         float t = 0.8f * ovs * static_cast<float>(i % resampled_trace_length);
+                         float t = 0.8f * ovs * static_cast<float>(i % resampled_trace_len);
                          return thrust::exp(tcf(0.f, -2.f * pi * freq1 * t));
                      });
     corr_downconversion_coeffs1 = hDownConv;
 
     thrust::fill(hDownConv.begin(), hDownConv.end(), tcf(0.f));
     thrust::tabulate(hDownConv.begin(), hDownConv.end(),
-                     [=] __host__(int i) -> tcf
+                     [pi, ovs, freq2, resampled_trace_len] __host__(int i) -> tcf
                      {
-                         float t = 0.8f * ovs * static_cast<float>(i % resampled_trace_length);
+                         float t = 0.8f * ovs * static_cast<float>(i % resampled_trace_len);
                          return thrust::exp(tcf(0.f, -2.f * pi * freq2 * t));
                      });
     corr_downconversion_coeffs2 = hDownConv;

@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Set the CUDA standard
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED True)
 set(CMAKE_CUDA_ARCHITECTURES 75)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda")
@@ -17,7 +17,7 @@ find_package(CUDAToolkit REQUIRED)
 set(CULIBRARIES CUDA::cudart_static CUDA::cublas CUDA::cufft CUDA::nppc CUDA::npps CUDA::curand)
 
 # Pybind11 and Python paths
-set(CONDA_ROOT_DIR "D:/miniconda3/envs/Measurement")
+set(CONDA_ROOT_DIR "C:/Users/Qop/miniconda3/envs/measurement")
 set(Python_EXECUTABLE ${CONDA_ROOT_DIR}/python.exe)
 set(pybind11_DIR ${CONDA_ROOT_DIR}/Library/share/cmake/pybind11)
 
@@ -42,13 +42,13 @@ file(GLOB CUDA_SOURCES *.cu)
 file(GLOB CUDA_HEADERS *.cuh)
 
 # Link the libraries to your target (assuming your target is named 'MyCudaProject')
-add_executable(${PROJECT_NAME} main.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu)
-target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY})
-target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
-
-
-# pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu )
-# target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
-# target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
+# add_executable(${PROJECT_NAME} main.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu)
+# target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR})
+# target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY})
 # target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
+
+
+pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu )
+target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
+target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
+target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")

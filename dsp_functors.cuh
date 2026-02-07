@@ -9,7 +9,7 @@ struct complex_conjugate {
     }
 };
 
-struct calibration_functor : thrust::unary_function<tcf &, void>
+struct calibration_functor
 {
     const float a_qi, a_qq;
     const float c_i, c_q;
@@ -69,7 +69,7 @@ struct corr_functor
     }
 };
 
-struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, tcf>
+struct cross_power_functor
 {   
 
     __device__ inline tcf operator()(const tcf &x, const tcf &y)
@@ -78,7 +78,7 @@ struct cross_power_functor : thrust::binary_function<const tcf &, const tcf &, t
     }
 };
 
-struct downconv_functor : public thrust::binary_function<const tcf &, const tcf &, tcf>
+struct downconv_functor
 {
     __device__ inline
         tcf
@@ -88,7 +88,7 @@ struct downconv_functor : public thrust::binary_function<const tcf &, const tcf 
     }
 };
 
-struct taper_functor : public thrust::binary_function<const tcf &, const float &, tcf>
+struct taper_functor
 {
     __device__ inline
         tcf

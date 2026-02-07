@@ -8,6 +8,9 @@
 #include <vector>
 #include <functional>
 #include <ostream>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "dlltyp.h"
 #include "regs.h"
 #include "dsp.cuh"
