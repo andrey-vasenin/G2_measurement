@@ -23,11 +23,10 @@
 
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, const char *coil_address)
+                         int second_oversampling)
 {
     dig = dig_;
     sampling_rate = static_cast<double>(dig->getSamplingRate());
-    coil = new yokogawa_gs210(coil_address);
     segment_size = dig->getSegmentSize();
     batch_size = batch;
     second_ovs = second_oversampling;
@@ -60,9 +59,9 @@ void Measurement::setDigParameters()
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, const char *coil_address)
+                         int second_oversampling)
     : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
-                  second_oversampling, coil_address)
+                  second_oversampling)
 {
 }
 
@@ -220,41 +219,6 @@ void Measurement::measure()
     dig->launchFifo(static_cast<unsigned long>(notify_size), iters_num, func, true);
     dig->stopFifo();
     iters_done += iters_num;
-}
-
-void Measurement::asyncCurrentSwitch()
-{
-    coil->set_current(working_current);
-    auto subtr_trace = getSubtractionData();
-    resetOutput();
-    setSubtractionTrace(subtr_trace);
-    cudaDeviceSynchronize();
-}
-
-void Measurement::measureWithCoil()
-{
-    coil->set_current(offset_current);
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    dig->prepareFifo(notify_size);
-    dig->launchFifo(notify_size, iters_num, func, true);
-    iters_done += iters_num;
-
-    // uint64_t iters_delay = static_cast<size_t>(sampling_rate) / notify_size * 2;
-    // auto a = std::async(std::launch::async, &Measurement::asyncCurrentSwitch, this);
-    // dig->launchFifo(notify_size, iters_delay, func, false);
-    // a.wait();
-
-    std::thread t1(&Measurement::asyncCurrentSwitch, this);
-    // std::thread t2 (&Digitizer::launchFifo, dig, notify_size, iters_delay, func, false);
-    // dig->launchFifo(notify_size, iters_delay, func, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    t1.join();
-    // t2.join();
-    // asyncCurrentSwitch();
-
-    dig->launchFifo(notify_size, iters_num, func, true);
-    iters_done += iters_num;
-    dig->stopFifo();
 }
 
 void Measurement::measureTest()

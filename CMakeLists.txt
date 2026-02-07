@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(g2_measurement LANGUAGES CXX CUDA)
+project(AverageField_try LANGUAGES CXX CUDA)
 
 # Set the C++ standard
 set(CMAKE_CXX_STANDARD 20)

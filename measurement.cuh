@@ -23,7 +23,6 @@ class Measurement
 {
 private:
     Digitizer *dig;
-    yokogawa_gs210 *coil;
     dsp *processor;
     size_t segment_size;
     uint64_t segments_count;
@@ -48,10 +47,10 @@ private:
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, const char *coil_address);
+                int second_oversampling);
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, const char *coil_address);
+                int second_oversampling);
 
     Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
                 int second_oversampling);
@@ -90,8 +89,6 @@ public:
     void measure();
 
     void asyncCurrentSwitch();
-
-    void measureWithCoil();
 
     void measureTest();
 
