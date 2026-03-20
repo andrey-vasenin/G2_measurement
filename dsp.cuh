@@ -17,10 +17,10 @@
 #include <thrust/mr/allocator.h>
 #include <thrust/system/cuda/memory_resource.h>
 
-const int num_streams = 2;
+const int num_streams = 4;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
-const int num_channels = 2; // number of used digitizer channels
+const int num_channels = 2; // number of used digitizer channels (complex)
 
 typedef thrust::complex<float> tcf;
 typedef thrust::device_vector<float> gpuvec;
@@ -69,6 +69,7 @@ class dsp
     gpuvec_c data_without_central_peak2[num_streams];
 
     gpuvec_c interference_out[num_streams];
+    gpuvec_c g1[num_streams];
     gpuvec_c g1_cross_out[num_streams];
     gpuvec_c g1_filt_conj[num_streams];
     gpuvec_c g1_filt[num_streams];
@@ -77,6 +78,7 @@ class dsp
     gpuvec_c g2_out_filtered[num_streams];
     gpuvec_c g2_out_filtered_cross_segment[num_streams];
     gpuvec_c cross_power[num_streams];
+    gpuvec_c cross_spectrum[num_streams];
     gpuvec_c cross_power_short[num_streams];
     gpuvec_c power1[num_streams];
     gpuvec_c power2[num_streams];
@@ -96,6 +98,12 @@ class dsp
     gpuvec_c downconversion_coeffs;
     gpuvec_c corr_downconversion_coeffs1;
     gpuvec_c corr_downconversion_coeffs2;
+
+    gpuvec_c tmp1, tmp2, tmp_cross;
+
+    // Device-side accumulators for fast scalar reductions (e.g., S21)
+    float2* s21_sum1 = nullptr;
+    float2* s21_sum2 = nullptr;
 
 private:
     /* Useful variables */
@@ -173,21 +181,31 @@ public:
   
     hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
-    hostvec_c getG1CrossResult();
+    hostvec_c getG1Result();
 
-    hostvec_c getG1FiltResult();
+    std::pair<stdvec_c, stdvec_c> getAverageField();
 
-    hostvec_c getG1FiltConjResult();
+    std::pair<std::complex<float>, std::complex<float>> getS21();
 
-    hostvec_c getG2FullResult();
+    hostvec_c getCrossPower();
 
-    hostvec_c getG2CrossSegmentResult();
+    hostvec_c getCrossSpectrum();
+    
+    // hostvec_c getG1CrossResult();
 
-    hostvec_c getG2FilteredResult();
+    // hostvec_c getG1FiltResult();
 
-    hostvec_c getG2FilteredCrossSegmentResult();
+    // hostvec_c getG1FiltConjResult();
 
-    hostvec_c getInterferenceRsult();
+    // hostvec_c getG2FullResult();
+
+    // hostvec_c getG2CrossSegmentResult();
+
+    // hostvec_c getG2FilteredResult();
+
+    // hostvec_c getG2FilteredCrossSegmentResult();
+
+    // hostvec_c getInterferenceRsult();
 
     void setDownConversionCalibrationParameters(int channel_num, float r, float phi, float offset_i, float offset_q);
 

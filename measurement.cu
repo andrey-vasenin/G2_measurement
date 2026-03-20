@@ -15,7 +15,6 @@
 #include "digitizer.h"
 #include "measurement.cuh"
 #include "tiled_range.cuh"
-#include "yokogawa_gs210.h"
 #include <thrust/zip_function.h>
 #include <future>
 #include <thread>
@@ -23,11 +22,10 @@
 
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, const char *coil_address)
+                         int second_oversampling)
 {
     dig = dig_;
     sampling_rate = static_cast<double>(dig->getSamplingRate());
-    coil = new yokogawa_gs210(coil_address);
     segment_size = dig->getSegmentSize();
     batch_size = batch;
     second_ovs = second_oversampling;
@@ -60,9 +58,9 @@ void Measurement::setDigParameters()
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                         int second_oversampling, const char *coil_address)
+                         int second_oversampling)
     : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
-                  second_oversampling, coil_address)
+                  second_oversampling)
 {
 }
 
@@ -122,11 +120,6 @@ void Measurement::initializeBuffer()
         dig->setBuffer(processor->getBuffer(), buffersize);
 }
 
-void Measurement::setCurrents(float wc, float oc)
-{
-    working_current = wc;
-    offset_current = oc;
-}
 
 void Measurement::setAmplitude(int ampl)
 {
@@ -222,41 +215,6 @@ void Measurement::measure()
     iters_done += iters_num;
 }
 
-void Measurement::asyncCurrentSwitch()
-{
-    coil->set_current(working_current);
-    auto subtr_trace = getSubtractionData();
-    resetOutput();
-    setSubtractionTrace(subtr_trace);
-    cudaDeviceSynchronize();
-}
-
-void Measurement::measureWithCoil()
-{
-    coil->set_current(offset_current);
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    dig->prepareFifo(notify_size);
-    dig->launchFifo(notify_size, iters_num, func, true);
-    iters_done += iters_num;
-
-    // uint64_t iters_delay = static_cast<size_t>(sampling_rate) / notify_size * 2;
-    // auto a = std::async(std::launch::async, &Measurement::asyncCurrentSwitch, this);
-    // dig->launchFifo(notify_size, iters_delay, func, false);
-    // a.wait();
-
-    std::thread t1(&Measurement::asyncCurrentSwitch, this);
-    // std::thread t2 (&Digitizer::launchFifo, dig, notify_size, iters_delay, func, false);
-    // dig->launchFifo(notify_size, iters_delay, func, false);
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    t1.join();
-    // t2.join();
-    // asyncCurrentSwitch();
-
-    dig->launchFifo(notify_size, iters_num, func, true);
-    iters_done += iters_num;
-    dig->stopFifo();
-}
-
 void Measurement::measureTest()
 {
     for (uint32_t i = 0; i < iters_num; i++)
@@ -280,7 +238,7 @@ corr_t Measurement::getG1Correlator()
     corr_t avg_glr(side, trace_t(side));
 
     // Receive data from GPU
-    auto corrs = processor->getG1CrossResult();
+    auto corrs = processor->getG1Result();
     
     // Divide the data by a number of traces measured
     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
@@ -291,139 +249,192 @@ corr_t Measurement::getG1Correlator()
     return avg_glr;
 }
 
-corr_t Measurement::getG1FiltCorrelator()
+std::pair<stdvec_c, stdvec_c> Measurement::getAverageField()
 {
-    int side = processor->getResampledTraceLength();
+    int length = processor->getResampledTraceLength();
+    auto [afs1, afs2] = processor->getAverageField();
+    std::complex<float> X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
-    corr_t avg_glr(side, trace_t(side));
+    for (int i = 0; i < length; i++)
+    {
+        afs1[i] /= X;
+        afs2[i] /= X;
+    }
+    return {afs1, afs2};
+}
 
-    // Receive data from GPU
-    auto corrs = processor->getG1FiltResult();
+std::pair<std::complex<float>, std::complex<float>> Measurement::getS21()
+{
+    auto [s21_1, s21_2] = processor->getS21();
+    std::complex<float> X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    s21_1 /= X;
+    s21_2 /= X;
+    return {s21_1, s21_2};
+}
+
+stdvec_c Measurement::getCrossPower()
+{
+    auto cross_power = processor->getCrossPower();
+    return postprocess<tcf, std::complex<float>>(cross_power);
+}
+
+stdvec_c Measurement::getCrossSpectrum()
+{
+    auto cross_spectrum = processor->getCrossSpectrum();
+    return postprocess<tcf, std::complex<float>>(cross_spectrum);
+}
+
+// corr_t Measurement::getG1Correlator()
+// {
+//     int side = processor->getResampledTraceLength();
+
+//     corr_t avg_glr(side, trace_t(side));
+
+//     // Receive data from GPU
+//     auto corrs = processor->getG1CrossResult();
     
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
 
-    return avg_glr;
-}
+//     return avg_glr;
+// }
 
-corr_t Measurement::getG1FiltConjCorrelator()
-{
-    int side = processor->getResampledTraceLength();
+// corr_t Measurement::getG1FiltCorrelator()
+// {
+//     int side = processor->getResampledTraceLength();
 
-    corr_t avg_glr(side, trace_t(side));
+//     corr_t avg_glr(side, trace_t(side));
 
-    // Receive data from GPU
-    auto corrs = processor->getG1FiltConjResult();
+//     // Receive data from GPU
+//     auto corrs = processor->getG1FiltResult();
     
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
 
-    return avg_glr;
-}
+//     return avg_glr;
+// }
 
-corr_t Measurement::getG2Correlator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+// corr_t Measurement::getG1FiltConjCorrelator()
+// {
+//     int side = processor->getResampledTraceLength();
 
-    // Receive data from GPU
-    auto result = processor->getG2FullResult();
+//     corr_t avg_glr(side, trace_t(side));
 
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     // Receive data from GPU
+//     auto corrs = processor->getG1FiltConjResult();
+    
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
 
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-        }
-    return avg_g2;
-}
+//     return avg_glr;
+// }
 
-corr_t Measurement::getG2CrossSegmentCorrelator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+// corr_t Measurement::getG2Correlator()
+// {
+//     int side = processor->getResampledTraceLength();
+//     corr_t avg_g2(side, trace_t(side));
 
-    // Receive data from GPU
-    auto result = processor->getG2CrossSegmentResult();
+//     // Receive data from GPU
+//     auto result = processor->getG2FullResult();
 
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-        }
-    return avg_g2;
-}
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//         {
+//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+//         }
+//     return avg_g2;
+// }
 
-corr_t Measurement::getG2FilteredCorrelator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+// corr_t Measurement::getG2CrossSegmentCorrelator()
+// {
+//     int side = processor->getResampledTraceLength();
+//     corr_t avg_g2(side, trace_t(side));
 
-    // Receive data from GPU
-    auto result = processor->getG2FilteredResult();
+//     // Receive data from GPU
+//     auto result = processor->getG2CrossSegmentResult();
 
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-        }
-    return avg_g2;
-}
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//         {
+//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+//         }
+//     return avg_g2;
+// }
 
-corr_t Measurement::getG2FilteredCrossSegmentCorrelator()
-{
-    int side = processor->getResampledTraceLength();
-    corr_t avg_g2(side, trace_t(side));
+// corr_t Measurement::getG2FilteredCorrelator()
+// {
+//     int side = processor->getResampledTraceLength();
+//     corr_t avg_g2(side, trace_t(side));
 
-    // Receive data from GPU
-    auto result = processor->getG2FilteredCrossSegmentResult();
+//     // Receive data from GPU
+//     auto result = processor->getG2FilteredResult();
 
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-        }
-    return avg_g2;
-}
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//         {
+//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+//         }
+//     return avg_g2;
+// }
 
-stdvec_c Measurement::getInterferenceResult()
-{
-    int side = processor->getResampledTraceLength();
-    stdvec_c avg_res(side);
+// corr_t Measurement::getG2FilteredCrossSegmentCorrelator()
+// {
+//     int side = processor->getResampledTraceLength();
+//     corr_t avg_g2(side, trace_t(side));
 
-    auto result = processor->getInterferenceRsult();
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        {
-            avg_res[t1] = std::complex<float>(result[t1] / X);
-        }
-    return avg_res;
-}
+//     // Receive data from GPU
+//     auto result = processor->getG2FilteredCrossSegmentResult();
 
-stdvec_c Measurement::getRawG2()
-{
-    // Receive data from GPU
-    auto result = processor->getG2FullResult();
+//     // Divide the data by a number of traces measured
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
 
-    return stdvec_c(result.begin(), result.end());
-}
+//     for (int t1 = 0; t1 < side; t1++)
+//         for (int t2 = 0; t2 < side; t2++)
+//         {
+//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
+//         }
+//     return avg_g2;
+// }
+
+// stdvec_c Measurement::getInterferenceResult()
+// {
+//     int side = processor->getResampledTraceLength();
+//     stdvec_c avg_res(side);
+
+//     auto result = processor->getInterferenceRsult();
+//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+//     for (int t1 = 0; t1 < side; t1++)
+//         {
+//             avg_res[t1] = std::complex<float>(result[t1] / X);
+//         }
+//     return avg_res;
+// }
+
+// stdvec_c Measurement::getRawG2()
+// {
+//     // Receive data from GPU
+//     auto result = processor->getG2FullResult();
+
+//     return stdvec_c(result.begin(), result.end());
+// }
 
 void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
 {

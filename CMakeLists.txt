@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(g2_measurement LANGUAGES CXX CUDA)
+project(AverageField LANGUAGES CXX CUDA)
 
 # Set the C++ standard
 set(CMAKE_CXX_STANDARD 20)
@@ -48,7 +48,7 @@ file(GLOB CUDA_HEADERS *.cuh)
 # target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
 
 
-pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu )
+pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu measurement.cu )
 target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
 target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
 target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")

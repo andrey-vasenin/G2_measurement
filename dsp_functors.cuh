@@ -69,6 +69,14 @@ struct corr_functor
     }
 };
 
+struct cross_corr_accum_functor
+{
+    __device__ inline void operator()(const tcf& x, const tcf& y, tcf& z)
+    {
+        z += thrust::conj(x) * y;
+    }
+};
+
 struct cross_power_functor
 {   
 

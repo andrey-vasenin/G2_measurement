@@ -47,7 +47,7 @@ Digitizer::~Digitizer()
 // private method to use with initializer
 void Digitizer::loadProperties()
 {
-    spcm_dwGetParam_i32(handle, SPC_PXIHWSLOTNO, &slot);
+    // spcm_dwGetParam_i32(handle, SPC_PXIHWSLOTNO, &slot);
     this->handleError();
 }
 

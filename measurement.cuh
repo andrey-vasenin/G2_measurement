@@ -11,7 +11,6 @@
 #include "digitizer.h"
 #include "dsp.cuh"
 #include "pinned_allocator.cuh"
-#include "yokogawa_gs210.h"
 
 // namespace py = pybind11;
 
@@ -23,7 +22,6 @@ class Measurement
 {
 private:
     Digitizer *dig;
-    yokogawa_gs210 *coil;
     dsp *processor;
     size_t segment_size;
     uint64_t segments_count;
@@ -36,9 +34,6 @@ private:
 
     int second_ovs;
 
-    float offset_current = 0.f;
-    float working_current = 0.f;
-
     float max = 0.f;
 
     thrust::host_vector<int8_t> test_input;
@@ -48,10 +43,10 @@ private:
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, const char *coil_address);
+                int second_oversampling);
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
-                int second_oversampling, const char *coil_address);
+                int second_oversampling);
 
     Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
                 int second_oversampling);
@@ -59,8 +54,6 @@ public:
     void setDigParameters();
                 
     void setAmplitude(int ampl);
-
-    void setCurrents(float wc, float oc);
 
     void setAveragesNumber(uint64_t averages);
 
@@ -91,31 +84,39 @@ public:
 
     void asyncCurrentSwitch();
 
-    void measureWithCoil();
-
     void measureTest();
 
     void setTestInput(const std::vector<int8_t> &input);
 
     corr_t getG1Correlator();
 
-    corr_t getG1FiltCorrelator();
+    std::pair<stdvec_c, stdvec_c> getAverageField();
 
-    corr_t getG1FiltConjCorrelator();
+    std::pair<std::complex<float>, std::complex<float>> getS21();
+
+    stdvec_c getCrossPower();
+
+    stdvec_c getCrossSpectrum();
+
+    // corr_t getG1Correlator();
+
+    // corr_t getG1FiltCorrelator();
+
+    // corr_t getG1FiltConjCorrelator();
   
-    corr_t getG2Correlator();
+    // corr_t getG2Correlator();
 
-    corr_t getG2CrossSegmentCorrelator();
+    // corr_t getG2CrossSegmentCorrelator();
 
-    corr_t getG2FilteredCorrelator();
+    // corr_t getG2FilteredCorrelator();
 
-    corr_t getG2FilteredCrossSegmentCorrelator();
+    // corr_t getG2FilteredCrossSegmentCorrelator();
 
-    stdvec_c getInterferenceResult();
+    // stdvec_c getInterferenceResult();
+
+    // stdvec_c getRawG2();
 
     std::vector<stdvec_c> getSubtractionData();
-
-    stdvec_c getRawG2();
 
     void setSubtractionTrace(std::vector<stdvec_c> trace);
 
