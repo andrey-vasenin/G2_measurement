@@ -1320,3 +1320,303 @@ The build cleanup should target this environment explicitly:
 - preferred conda env: `qom`
 - CUDA toolkit: `CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0`
 - GPU architecture: RTX 5090, so CMake should not remain hardcoded only to architecture `75`; it should expose `CMAKE_CUDA_ARCHITECTURES` as a preset/cache value.
+
+## 23. C++/CUDA Module Handoff State and Planned Native Changes
+
+This section is intended as a compact handoff for an agent refactoring the surrounding `QO-measurements` Python code. It describes the current native module contract and the expected near-term native changes. Do not assume older notebook examples are authoritative if they conflict with this section.
+
+### 23.1 Current Native Repository State
+
+Native repository:
+
+```text
+Path: /Users/vvvoskr/Projects/G2_measurement
+Branch: dev
+Remote: git@github.com:andrey-vasenin/G2_measurement.git
+Current relevant commit: 6e981a4 Add result modes for AverageField outputs
+```
+
+Important recent dev-branch changes:
+
+- CMake/VSCode build workflow and smoke targets were added.
+- FIFO buffer lifetime was guarded with a CUDA event after the async host-to-device copy.
+- GPU-reading getters now synchronize the nonblocking compute streams before reducing/copying results to host.
+- `second_oversampling = 1, 2, 4` is covered by the synthetic `measure_test` smoke regression.
+- `get_average_field()` now uses `resampled_trace_length`, not raw `trace_length`.
+- Python-facing G1 matrices now use `std::complex<float>` instead of `std::complex<double>`.
+- The old `part` constructor parameter was removed. The full Spectrum segment is now the raw trace length.
+- Native `result_mode` was added to make output allocation and compute work explicit.
+
+Validation state:
+
+- Earlier commits up through the getter synchronization and `part` removal passed MeasurementPC tests.
+- The latest `result_mode` commit has only local lightweight validation on macOS: Python smoke script syntax, notebook JSON validity, and `git diff --check`.
+- The latest `result_mode` commit still needs MeasurementPC CUDA build/runtime validation with `cmake --build --preset windows-qom-smoke-all --verbose`.
+
+### 23.2 Current Public Pybind Contract
+
+The compiled module name is still:
+
+```python
+AverageField
+```
+
+The exposed class is:
+
+```python
+AverageField.AverageFieldMeasurer
+```
+
+Current constructor signatures:
+
+```python
+AverageFieldMeasurer(
+    digitizer_handle: int,
+    averages: int,
+    batch: int,
+    second_oversampling: int,
+    result_mode: str = "average_g1",
+)
+
+AverageFieldMeasurer(
+    averages: int,
+    batch: int,
+    segment: int,
+    digitizer_oversampling: int,
+    second_oversampling: int,
+    result_mode: str = "average_g1",
+)
+```
+
+There is no active `part` parameter. Any Python wrapper or notebook that still passes `part=1` is stale.
+
+Shape and mode helpers exposed to Python:
+
+```python
+get_total_length()
+get_trace_length()              # raw trace length
+get_resampled_trace_length()    # processed output trace length
+get_out_size()                  # resampled_trace_length ** 2
+get_notify_size()
+get_result_mode()
+```
+
+Current result getters:
+
+```python
+get_average_field()
+get_s21()
+get_g1_correlator()
+get_g1_other_correlators()
+get_cross_power()
+get_cross_spectrum()
+get_subtraction_data()
+get_subtraction_trace()
+```
+
+Getters for disabled outputs now throw a clear `result_mode` error. Python code should not call heavy-output getters unless the measurer was constructed with a mode that enables them.
+
+### 23.3 Result Modes and Output Availability
+
+`result_mode="average"`:
+
+- Intended for S21 scans and measurements that only need average field and/or S21.
+- Allocates and computes:
+  - raw Spectrum input buffer,
+  - two full-rate complex channel buffers,
+  - two resampled channel buffers,
+  - subtraction accumulators,
+  - FIR/downconversion state,
+  - S21 scalar reduction buffers.
+- Does not allocate or compute:
+  - cuBLAS handles,
+  - G1 matrices,
+  - G1-other matrices,
+  - cross-power/cross-spectrum accumulators,
+  - correlation FFT plans.
+- Valid getters:
+  - `get_average_field()`
+  - `get_s21()`
+  - `get_subtraction_data()`
+  - `get_subtraction_trace()`
+
+`result_mode="average_g1"`:
+
+- Default mode.
+- Intended for regular pulse measurements where the main outputs are average field and main G1.
+- Adds:
+  - one resampled conjugate buffer for channel 2,
+  - cuBLAS handles,
+  - main `g1` matrix accumulator.
+- Valid getters in addition to `average` mode:
+  - `get_g1_correlator()`
+- Invalid in this mode:
+  - `get_g1_other_correlators()`
+  - `get_cross_power()`
+  - `get_cross_spectrum()`
+
+`result_mode="all_correlators"`:
+
+- Intended for separate heavier experiments that need average field and all correlators.
+- Adds:
+  - second resampled conjugate buffer,
+  - `g1_annihilation`,
+  - `g1_creation`,
+  - `g1_reordered`,
+  - cross-power accumulator,
+  - cross-spectrum accumulator,
+  - correlation FFT plans.
+- Restores the old heavy behavior.
+- Valid getters:
+  - all current getters listed in section 23.2.
+
+Aliases accepted by native parsing:
+
+```text
+average:          "average", "average_only", "s21"
+average_g1:       "average_g1", "regular", "pulse"
+all_correlators:  "all_correlators", "all"
+```
+
+For new QO-measurements code, prefer the canonical names: `average`, `average_g1`, and `all_correlators`.
+
+### 23.4 Current DSP Processing Path
+
+All modes still use the same two-complex-channel processing model:
+
+```text
+physical ch0 + ch1 -> complex field 1
+physical ch2 + ch3 -> complex field 2
+```
+
+The active native compute loop per FIFO batch is:
+
+1. Copy Spectrum FIFO span to GPU with `cudaMemcpy2DAsync`.
+2. Record a CUDA event so the FIFO span is not released before the input copy completes.
+3. Split packed `char4` input into two complex float traces.
+4. Apply per-channel IQ calibration.
+5. Apply FFT-domain FIR window.
+6. Downconvert.
+7. Apply `second_oversampling` box downsampling with factors 1, 2, or 4.
+8. Subtract stored subtraction trace.
+9. Accumulate subtraction data for average-field/S21/subtraction getters.
+10. Conditionally compute enabled outputs:
+    - no GEMM in `average`,
+    - one GEMM in `average_g1`,
+    - four G1-family GEMMs plus cross-power/cross-spectrum in `all_correlators`.
+
+The code still assumes two complex fields. Native 2-physical-channel Spectrum mode is not implemented yet.
+
+### 23.5 QO-Measurements Integration Guidance
+
+For the other agent working on `QO-measurements`:
+
+- Do not pass `part`.
+- Choose `result_mode` explicitly from the intended workflow:
+  - S21 scans: `result_mode="average"`
+  - normal pulse measurement with average field + main G1: `result_mode="average_g1"`
+  - full correlator experiment: `result_mode="all_correlators"`
+- If a notebook calls `get_cross_power()`, `get_cross_spectrum()`, or `get_g1_all_correlators()`, it must construct with `result_mode="all_correlators"`.
+- If a notebook only plots average field or S21, use `result_mode="average"` to reduce GPU memory and time.
+- For axes and array lengths, use `get_resampled_trace_length()` for processed outputs. Use `get_trace_length()` only for raw segment length.
+- For time axes after second oversampling:
+
+```text
+effective_sample_rate = digitizer_sample_rate / second_oversampling
+```
+
+or, if using the driver oversampling factor convention:
+
+```text
+effective_sample_rate_MHz = 1250 / digitizer_oversampling / second_oversampling
+```
+
+Important workflow instruction from the project owner:
+
+- Do not make more changes in `QO-measurements` from this native-module thread unless explicitly requested.
+
+### 23.6 Planned C++/CUDA Native Refactor Sequence
+
+Recommended next native changes, in order:
+
+1. Validate constructor inputs.
+   - Require `second_oversampling` to be 1, 2, or 4 before allocating GPU buffers.
+   - Require `trace_length % second_oversampling == 0`.
+   - Require `batch > 0`, `segment > 0`, and `averages` divisible by `batch` or explicitly handle a final partial batch.
+   - Throw clear C++ exceptions that pybind converts to Python exceptions.
+
+2. Delete legacy dead code after `result_mode` is validated on MeasurementPC.
+   - Remove unused `dsp` members that are only referenced in commented code:
+     - `data_for_correlation1/2`
+     - `data_without_central_peak1/2`
+     - `interference_out`
+     - `g1_filt`
+     - inactive `g2_out*` buffers if they are not part of the future GEMM G2 plan
+     - `cross_power_short`
+     - `power1`, `power2`, `power_short`
+   - Remove commented pybind G2/G1-filter/interference bindings.
+   - Either delete stale `main.cpp` or move it to a documented experimental/manual-test target.
+
+3. Make resource ownership safer.
+   - Replace raw `Digitizer *dig` and `dsp *processor` in `Measurement` with RAII ownership (`std::unique_ptr`) where possible.
+   - Make borrowed Spectrum handle ownership explicit, because `from_handle` wraps a handle owned by the Python driver.
+   - Make `free()` idempotent and safe after partial construction failures.
+
+4. Split mode-specific DSP responsibilities.
+   - Keep the public `result_mode` API stable.
+   - Internally separate always-needed average/S21 state from G1 and all-correlator state.
+   - This can be done with helper structs before larger class splitting:
+     - `AverageState`
+     - `G1State`
+     - `AllCorrelatorState`
+
+5. Implement native 2-physical-channel mode.
+   - Add a channel layout/config parameter separate from `result_mode`.
+   - For 2 physical channels, form only one complex field from `[0, 1]`.
+   - Allow only average-field/S21 style outputs in this mode.
+   - Reject cross-channel G1/G2/cross-power requests clearly because there is no second complex field.
+
+6. Add intermediate snapshot/chunked measurement support.
+   - Add a method that processes a fixed number of batches without resetting output devices.
+   - Expose processed averages/batches count to Python.
+   - Keep relative phase stable by not restarting external signal devices between chunks.
+   - For live plotting, prefer average field, S21, G1 diagonal, or small G1 ROI over full G1 matrix transfer.
+
+7. Return large arrays as NumPy buffers directly.
+   - Current nested-vector G1 conversion is still expensive.
+   - Add pybind `py::array_t<std::complex<float>>` returns for G1 and other large outputs.
+   - Keep the existing getters until wrapper migration is complete, or add new getters first:
+     - `get_g1_correlator_array()`
+     - `get_average_field_array()`
+
+8. Reintroduce only the future G2 path that is actually needed.
+   - Keep GEMM-based G2 as the preferred future implementation.
+   - Do not restore multiple legacy G2 variants unless the experiment workflow requires them.
+   - Put G2 behind a future explicit mode such as `result_mode="g2"` or `result_mode="all_correlators_g2"`.
+
+### 23.7 MeasurementPC Test Plan After Each Native Refactor
+
+Minimum test loop:
+
+```bat
+cd C:\Users\Qop\AverageField
+git pull
+C:\Users\Qop\miniconda3\Scripts\activate.bat qom
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64
+cmake --build --preset windows-qom-smoke-all --verbose
+```
+
+The current smoke test should cover:
+
+```text
+second_oversampling = 1, 2, 4
+result_mode = average, average_g1, all_correlators
+```
+
+After native smoke passes, deploy the `.pyd` into `QO-measurements` only when notebook testing is needed:
+
+```bat
+copy /Y C:\Users\Qop\AverageField\build\windows-qom-ninja\AverageField.cp313-win_amd64.pyd C:\Users\Qop\QO-measurements\lib2\quantumOptics\
+```
+
+Then run a minimal hardware sanity notebook/cell sequence before running long scans.
