@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-qom-ninja",
+      "displayName": "Windows qom Ninja",
+      "description": "MeasurementPC build using the qom conda env, Ninja, MSVC, CUDA, and local Spectrum c_header.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CUDA_ARCHITECTURES": "native",
+        "CONDA_ROOT_DIR": "C:/Users/Qop/miniconda3/envs/qom",
+        "Python_EXECUTABLE": "C:/Users/Qop/miniconda3/envs/qom/python.exe",
+        "SPCM_ROOT_DIR": "${sourceDir}/c_header",
+        "VISA_ROOT_DIR": "C:/Program Files/IVI Foundation/VISA/Win64",
+        "AVERAGEFIELD_WITH_VISA": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-qom-release",
+      "displayName": "Build Windows qom Release",
+      "configurePreset": "windows-qom-ninja"
+    }
+  ]
+}

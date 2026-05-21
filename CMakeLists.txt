@@ -2,53 +2,66 @@ cmake_minimum_required(VERSION 3.20)
 
 project(AverageField LANGUAGES CXX CUDA)
 
-# Set the C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Set the CUDA standard
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED True)
-set(CMAKE_CUDA_ARCHITECTURES 75)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda")
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures to build for")
+endif()
 
-# Cuda Toolkit
 find_package(CUDAToolkit REQUIRED)
 set(CULIBRARIES CUDA::cudart_static CUDA::cublas CUDA::cufft CUDA::nppc CUDA::npps CUDA::curand)
 
-# Pybind11 and Python paths
-set(CONDA_ROOT_DIR "C:/Users/Qop/miniconda3/envs/measurement")
-set(Python_EXECUTABLE ${CONDA_ROOT_DIR}/python.exe)
-set(pybind11_DIR ${CONDA_ROOT_DIR}/Library/share/cmake/pybind11)
+set(CONDA_ROOT_DIR "" CACHE PATH "Optional conda environment root, for example C:/Users/Qop/miniconda3/envs/qom")
+if(CONDA_ROOT_DIR AND NOT Python_EXECUTABLE)
+    set(Python_EXECUTABLE "${CONDA_ROOT_DIR}/python.exe" CACHE FILEPATH "Python executable" FORCE)
+endif()
 
-# Find Pybind11 and Python
-find_package(Python COMPONENTS Interpreter Development NumPy)
-find_package(pybind11 REQUIRED)
+find_package(Python REQUIRED COMPONENTS Interpreter Development NumPy)
 
-# Digitizer Spectrum
-set(SPCM_ROOT_DIR c_header)
-find_library(SPCM_LIBRARIES spcm_win64_msvcpp ${SPCM_ROOT_DIR})
+if(NOT pybind11_DIR)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+        OUTPUT_VARIABLE _pybind11_cmake_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_pybind11_cmake_dir)
+        set(pybind11_DIR "${_pybind11_cmake_dir}" CACHE PATH "pybind11 CMake package directory" FORCE)
+    endif()
+endif()
+find_package(pybind11 CONFIG REQUIRED)
 
-# Visa
-set(VISA_ROOT_DIR "C:/Program Files/IVI Foundation/VISA/Win64")
-set(VISA_INCLUDE_DIR ${VISA_ROOT_DIR}/Include)
-set(VISA_LIB_DIR ${VISA_ROOT_DIR}/Lib_x64/msc)
-find_library(VISA_LIBRARY visa64 ${VISA_LIB_DIR})
+set(SPCM_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/c_header" CACHE PATH "Spectrum SDK c_header directory")
+foreach(_spcm_header dlltyp.h regs.h spcerr.h spcm_drv.h)
+    if(NOT EXISTS "${SPCM_ROOT_DIR}/${_spcm_header}")
+        message(FATAL_ERROR "Missing Spectrum header ${_spcm_header} in SPCM_ROOT_DIR=${SPCM_ROOT_DIR}")
+    endif()
+endforeach()
+find_library(SPCM_LIBRARY NAMES spcm_win64_msvcpp PATHS "${SPCM_ROOT_DIR}" REQUIRED)
 
-# Gather all .cpp, .h, .cu and .cuh files
-file(GLOB CPP_SOURCES *.cpp)
-file(GLOB CPP_HEADERS *.h)
-file(GLOB CUDA_SOURCES *.cu)
-file(GLOB CUDA_HEADERS *.cuh)
+option(AVERAGEFIELD_WITH_VISA "Link VISA for legacy instrument-control builds" ON)
+if(AVERAGEFIELD_WITH_VISA)
+    set(VISA_ROOT_DIR "C:/Program Files/IVI Foundation/VISA/Win64" CACHE PATH "VISA Win64 root directory")
+    set(VISA_INCLUDE_DIR "${VISA_ROOT_DIR}/Include" CACHE PATH "VISA include directory")
+    set(VISA_LIB_DIR "${VISA_ROOT_DIR}/Lib_x64/msc" CACHE PATH "VISA library directory")
+    find_library(VISA_LIBRARY NAMES visa64 PATHS "${VISA_LIB_DIR}" REQUIRED)
+endif()
 
-# Link the libraries to your target (assuming your target is named 'MyCudaProject')
-# add_executable(${PROJECT_NAME} main.cpp digitizer.cpp dsp.cu yokogawa_gs210.cpp measurement.cu)
-# target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR})
-# target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY})
-# target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
+message(STATUS "Python executable: ${Python_EXECUTABLE}")
+message(STATUS "Python NumPy include dirs: ${Python_NumPy_INCLUDE_DIRS}")
+message(STATUS "pybind11_DIR: ${pybind11_DIR}")
+message(STATUS "SPCM_ROOT_DIR: ${SPCM_ROOT_DIR}")
+message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
-
-pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu measurement.cu )
-target_include_directories(${PROJECT_NAME} PUBLIC ${SPCM_ROOT_DIR} ${VISA_INCLUDE_DIR} ${Python_INCLUDE_DIRS} ${pybind11_INCLUDE_DIR})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} ${SPCM_LIBRARIES} ${VISA_LIBRARY} ${Python_LIBRARIES})
+pybind11_add_module(${PROJECT_NAME} binding.cpp digitizer.cpp dsp.cu measurement.cu)
+target_compile_options(${PROJECT_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
+target_include_directories(${PROJECT_NAME} PRIVATE "${SPCM_ROOT_DIR}" ${Python_NumPy_INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME} PRIVATE ${CULIBRARIES} "${SPCM_LIBRARY}")
+if(AVERAGEFIELD_WITH_VISA)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${VISA_INCLUDE_DIR}")
+    target_link_libraries(${PROJECT_NAME} PRIVATE "${VISA_LIBRARY}")
+endif()
 target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")

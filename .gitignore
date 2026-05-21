@@ -9,3 +9,5 @@ x64
 changes.txt
 *.py
 *.ipynb
+!tools/
+!tools/*.py
