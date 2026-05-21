@@ -1049,14 +1049,14 @@ averages = 1 << 22 = 4194304
 second_oversampling = 1, 2, or 4
 ```
 
-The Python Spectrum driver rounds a 1000 ns segment at 1.25 GS/s from 1250 samples to the next multiple of 32, so the practical segment size is expected to be 1280 samples.
+Initial estimate before testing was that the Python Spectrum driver would round a 1000 ns segment at 1.25 GS/s from 1250 samples to the next multiple of 32. MeasurementPC tests with `digitizer_delay=90` show the actual configured segment size is `1248` samples.
 
 For `n_seg=8192`:
 
 | Physical channels | Logical mode | Notify bytes | Notify size | Host buffer size (`4*notify`) |
 | ---: | --- | ---: | ---: | ---: |
-| 2 | one IQ trace, `CH0+i*CH1` | 20,971,520 | 20 MiB | 80 MiB |
-| 4 | two IQ traces, `CH0+i*CH1`, `CH2+i*CH3` | 41,943,040 | 40 MiB | 160 MiB |
+| 2 | one IQ trace, `CH0+i*CH1` | 20,447,232 | 19.5 MiB | 78 MiB |
+| 4 | two IQ traces, `CH0+i*CH1`, `CH2+i*CH3` | 40,894,464 | 39 MiB | 156 MiB |
 
 These notify sizes are already far into the measured FIFO plateau. Interrupt overhead should not be the bottleneck for the planned `n_seg`.
 
@@ -1064,14 +1064,14 @@ The limiting factor is sustained transfer rate versus trigger/pulse repetition p
 
 | Physical channels | Raw stream rate | Compare to measured 2.618 GiB/s plateau |
 | ---: | ---: | --- |
-| 2 | about 2441 MiB/s | technically below the benchmark, but only about 7 percent headroom before GPU copy/processing overhead |
-| 4 | about 4883 MiB/s | above the card benchmark; not viable as continuous 1 us-period FIFO streaming |
+| 2 | about 2380 MiB/s | below the benchmark, but only about 9 percent headroom before GPU copy/processing overhead |
+| 4 | about 4761 MiB/s | above the card benchmark; not viable as continuous 1 us-period FIFO streaming |
 
 Minimum repetition period implied by the measured FIFO plateau:
 
 ```text
-2 physical channels: about 0.93 us minimum, before safety margin
-4 physical channels: about 1.86 us minimum, before safety margin
+2 physical channels: about 0.91 us minimum, before safety margin
+4 physical channels: about 1.82 us minimum, before safety margin
 ```
 
 Practical recommendation:
@@ -1118,6 +1118,24 @@ Spectrum header/lib files confirmed:
   - regs.h
   - dlltyp.h
   - spcm_win64_msvcpp.lib
+VISA root present: C:\Program Files\IVI Foundation\VISA\Win64
+VISA libraries present:
+  - C:\Program Files\IVI Foundation\VISA\Win64\Lib_x64\msc\visa32.lib
+  - C:\Program Files\IVI Foundation\VISA\Win64\Lib_x64\msc\visa64.lib
+Deployed AverageField module:
+  - C:\Users\Qop\QO-measurements\lib2\quantumOptics\AverageField.cp313-win_amd64.pyd
+  - size: 1006592 bytes
+  - timestamp: 2026-03-26 23:13:28
+  - imports successfully after adding CUDA v13 bin directory
+Deployed pybind methods:
+  - free, get_average_field, get_cross_power, get_cross_spectrum
+  - get_g1_correlator, get_g1_other_correlators
+  - get_notify_size, get_out_size, get_s21, get_subtraction_data
+  - get_subtraction_trace, get_total_length, get_trace_length
+  - measure, measure_test, reset, reset_output
+  - set_amplitude, set_averages_number, set_calibration
+  - set_corr_downconvert_freqs, set_firwin, set_intermediate_frequency
+  - set_subtraction_trace, set_test_input
 ```
 
 Important observations:
@@ -1127,6 +1145,13 @@ Important observations:
 - `cmake`, `ninja`, and `cl` were not visible from that PowerShell session. This does not prove they are absent; it only means the current shell PATH does not expose them. On Windows, `cl` is normally available only after opening "x64 Native Tools Command Prompt/PowerShell for VS" or after running `VsDevCmd.bat`.
 - In PowerShell, prefer `Get-Command <tool>` or `where.exe <tool>` over bare `where <tool>`, because `where` can resolve to a PowerShell alias rather than the Windows `where.exe`.
 - Spectrum SDK headers and import library are now present in the active MeasurementPC repo under `c_header`, matching commit `c21d901 Add c_headers to git`.
+- VISA is installed, but the active branch should still consider making VISA optional because current active module sources do not use VISA APIs.
+- `dumpbin` is not visible in ordinary PowerShell. This is likely another Visual Studio developer-shell PATH issue, not a blocker for normal builds.
+- The deployed `.pyd` import surface matches the audited `binding.cpp` surface.
+- Hardware driver test with `digitizer_delay=90`, `dur_seg=1000 ns`, `n_seg=8192`, `sample_rate=1.25 GS/s` produced:
+  - 2 physical channels: `segment_size=1248`, `_bufsize=20447232`, estimated `2380.37 MiB/s`
+  - 4 physical channels: `segment_size=1248`, `_bufsize=40894464`, estimated `4760.74 MiB/s`
+- Hardware driver test with `digitizer_delay=0` failed in `Spectrum_m4x.py::calc_segment_size()` with `ZeroDivisionError`, because `get_sample_rate()` returned/used zero before successful sample-rate setup. The build/test cleanup should document `digitizer_delay=90` as the current known-good setting and the QO driver should later guard against zero sample rate.
 
 Recommended follow-up commands on MeasurementPC, using the intended `qom` environment:
 
