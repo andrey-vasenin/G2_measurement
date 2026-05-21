@@ -11,3 +11,4 @@ changes.txt
 *.ipynb
 !tools/
 !tools/*.py
+!hardware_fifo_sanity.ipynb
