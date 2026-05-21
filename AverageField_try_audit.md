@@ -1088,3 +1088,73 @@ Practical recommendation:
   - overrun count/errors.
 
 This benchmark should be run before optimizing kernels, because no GPU optimization can compensate for a PCIe FIFO stream rate above the card/host transfer limit.
+
+## 21. MeasurementPC Environment Snapshot
+
+Environment information reported from MeasurementPC on 2026-05-21:
+
+```text
+Working tree path: C:\Users\Qop\AverageField
+Current branch on MeasurementPC: AverageField_try
+Current MeasurementPC HEAD: c21d901 Add c_headers to git
+Previous shared branch commit: c1bbb58 Add calculation of abnormal g1 correlators
+Python executable tested first: C:\Users\Qop\miniconda3\python.exe
+Python version: 3.13.5, MSC v.1929 64 bit (AMD64)
+Python extension suffix: .cp313-win_amd64.pyd
+Conda envs present: base, measurement, qom
+Preferred env for future work: qom
+GPU: NVIDIA GeForce RTX 5090
+Driver: 580.97
+CUDA runtime reported by nvidia-smi: 13.0
+GPU memory: 32607 MiB
+CUDA toolkit: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0
+nvcc: release 13.0, V13.0.48
+Spectrum runtime DLL: C:\Windows\System32\spcm_win64.dll
+Spectrum headers/libs in active repo: C:\Users\Qop\AverageField\c_header
+Spectrum duplicate checkout path: C:\Users\Qop\G2_measurement\c_header
+Spectrum example SDK path: C:\Users\Qop\Documents\Spectrum GmbH\Examples\c_cpp\c_header
+Spectrum header/lib files confirmed:
+  - spcm_drv.h
+  - regs.h
+  - dlltyp.h
+  - spcm_win64_msvcpp.lib
+```
+
+Important observations:
+
+- The MeasurementPC `AverageField_try` branch now has commit `c21d901` adding `c_headers` to git. The local development `dev` branch must be rebased/merged onto that commit before source edits, otherwise build cleanup will be based on a stale tree that still lacks the tracked Spectrum headers.
+- The first Python commands were run from base conda, not `qom`. Base has NumPy/SciPy/Matplotlib/ipympl but no `pybind11`. Future build commands should explicitly activate `qom`.
+- `cmake`, `ninja`, and `cl` were not visible from that PowerShell session. This does not prove they are absent; it only means the current shell PATH does not expose them. On Windows, `cl` is normally available only after opening "x64 Native Tools Command Prompt/PowerShell for VS" or after running `VsDevCmd.bat`.
+- In PowerShell, prefer `Get-Command <tool>` or `where.exe <tool>` over bare `where <tool>`, because `where` can resolve to a PowerShell alias rather than the Windows `where.exe`.
+- Spectrum SDK headers and import library are now present in the active MeasurementPC repo under `c_header`, matching commit `c21d901 Add c_headers to git`.
+
+Recommended follow-up commands on MeasurementPC, using the intended `qom` environment:
+
+```powershell
+conda activate qom
+python --version
+python -c "import sys,sysconfig; print(sys.executable); print(sysconfig.get_config_var('EXT_SUFFIX'))"
+python -m pip list | findstr /I "numpy pybind11 cmake ninja"
+python -c "import numpy, pybind11; print('numpy', numpy.__version__, numpy.get_include()); print('pybind11', pybind11.__version__, pybind11.get_cmake_dir())"
+Get-Command python
+Get-Command cmake -ErrorAction SilentlyContinue
+Get-Command ninja -ErrorAction SilentlyContinue
+Get-Command cl -ErrorAction SilentlyContinue
+where.exe cmake
+where.exe ninja
+where.exe cl
+```
+
+If `cl` is still unavailable, run from a Visual Studio developer shell or locate Visual Studio Build Tools:
+
+```powershell
+Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Filter VsDevCmd.bat -Recurse -ErrorAction SilentlyContinue
+Get-ChildItem "C:\Program Files (x86)\Microsoft Visual Studio" -Filter VsDevCmd.bat -Recurse -ErrorAction SilentlyContinue
+```
+
+The build cleanup should target this environment explicitly:
+
+- Python ABI: `cp313-win_amd64`
+- preferred conda env: `qom`
+- CUDA toolkit: `CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0`
+- GPU architecture: RTX 5090, so CMake should not remain hardcoded only to architecture `75`; it should expose `CMAKE_CUDA_ARCHITECTURES` as a preset/cache value.
