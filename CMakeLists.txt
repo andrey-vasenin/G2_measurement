@@ -68,23 +68,49 @@ if(AVERAGEFIELD_WITH_VISA)
 endif()
 target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
 
-set(AVERAGEFIELD_SMOKE_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/smoke_import.py")
+set(AVERAGEFIELD_SMOKE_IMPORT_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/smoke_import.py")
+set(AVERAGEFIELD_SMOKE_MEASURE_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/smoke_measure_test.py")
 
 add_custom_target(smoke_import
-    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_IMPORT_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
     DEPENDS ${PROJECT_NAME}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Import-smoke-testing AverageField"
     VERBATIM
 )
 
+add_custom_target(smoke_measure_test
+    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_MEASURE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    DEPENDS ${PROJECT_NAME}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Running synthetic AverageField measure_test regression"
+    VERBATIM
+)
+
+add_custom_target(smoke_all
+    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_IMPORT_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_MEASURE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    DEPENDS ${PROJECT_NAME}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Running all AverageField smoke tests"
+    VERBATIM
+)
+
 if(BUILD_TESTING)
     add_test(
         NAME averagefield_import
-        COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+        COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_IMPORT_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
     )
     set_tests_properties(averagefield_import PROPERTIES
         LABELS "smoke"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    add_test(
+        NAME averagefield_measure_test
+        COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_MEASURE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    )
+    set_tests_properties(averagefield_measure_test PROPERTIES
+        LABELS "smoke;gpu"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 endif()

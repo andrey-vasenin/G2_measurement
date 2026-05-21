@@ -72,13 +72,25 @@ build\windows-qom-ninja\AverageField.cp313-win_amd64.pyd
 
 ## Import Smoke Test
 
-The recommended no-hardware validation is the CMake smoke-import build preset. It builds `AverageField` if needed, then imports the produced `.pyd` directly:
+The recommended no-hardware validation is the all-smoke build preset. It builds `AverageField` if needed, imports the produced `.pyd`, then runs a deterministic synthetic `measure_test` case on CUDA:
+
+```bat
+cmake --build --preset windows-qom-smoke-all --verbose
+```
+
+You can run only the import check:
 
 ```bat
 cmake --build --preset windows-qom-smoke-import --verbose
 ```
 
-You can also run the smoke test through CTest after building:
+Or only the synthetic `measure_test` check:
+
+```bat
+cmake --build --preset windows-qom-smoke-measure-test --verbose
+```
+
+You can also run both through CTest after building:
 
 ```bat
 ctest --preset windows-qom-smoke
@@ -88,9 +100,10 @@ For direct debugging, the underlying script is still available:
 
 ```bat
 python tools\smoke_import.py --build-dir build\windows-qom-ninja
+python tools\smoke_measure_test.py --build-dir build\windows-qom-ninja
 ```
 
-All three routes load the built `.pyd` and print or validate the available `AverageFieldMeasurer` methods. They do not touch digitizer hardware.
+These routes load the built `.pyd` directly from the build directory. They do not touch Spectrum digitizer hardware. The synthetic `measure_test` check uses the no-digitizer constructor and CUDA, so it should be run on the MeasurementPC.
 
 ## Optional Deploy to QO Notebook Package
 

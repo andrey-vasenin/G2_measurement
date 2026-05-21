@@ -36,6 +36,22 @@
       "targets": [
         "smoke_import"
       ]
+    },
+    {
+      "name": "windows-qom-smoke-measure-test",
+      "displayName": "Build and Smoke measure_test Windows qom",
+      "configurePreset": "windows-qom-ninja",
+      "targets": [
+        "smoke_measure_test"
+      ]
+    },
+    {
+      "name": "windows-qom-smoke-all",
+      "displayName": "Build and Run All Smoke Tests Windows qom",
+      "configurePreset": "windows-qom-ninja",
+      "targets": [
+        "smoke_all"
+      ]
     }
   ],
   "testPresets": [
