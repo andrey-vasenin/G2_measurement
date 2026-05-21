@@ -1017,3 +1017,68 @@ To make this practical, add:
 - A tiny `python -m qom_native_smoke` or notebook cell that prints module version, CUDA device, derived sizes, and a small test acquisition result.
 - A native `get_build_info()` pybind function returning commit, build date, CUDA version, architecture, and enabled compile options.
 - A versioned `.pyd` deployment rule so Python never silently imports an old binary after a rebuild.
+
+## 20. Spectrum FIFO Transfer Benchmark Implications
+
+Project-owner benchmark for the current MeasurementPC/card:
+
+```text
+Card: M4i.2212-x8 sn 23037, /dev/spcm0
+Host: MeasurementPC
+Control Center: 2.43 build 24028 (64 bit)
+Library: 7.9 build 24028
+Kernel: 6.4 build 23958
+PCIe: Gen2 x8, max payload 256 byte
+FIFO read plateau: about 2.60 GiB/s for notify sizes >= 128 KiB
+Best observed read: 2618.5 MiB/s at 8192 KiB notify size
+```
+
+The planned production settings are:
+
+```text
+sample_rate = 1.25 GS/s
+dur_seg = 1000 ns
+n_seg = 1 << 13 = 8192
+averages = 1 << 22 = 4194304
+second_oversampling = 1, 2, or 4
+```
+
+The Python Spectrum driver rounds a 1000 ns segment at 1.25 GS/s from 1250 samples to the next multiple of 32, so the practical segment size is expected to be 1280 samples.
+
+For `n_seg=8192`:
+
+| Physical channels | Logical mode | Notify bytes | Notify size | Host buffer size (`4*notify`) |
+| ---: | --- | ---: | ---: | ---: |
+| 2 | one IQ trace, `CH0+i*CH1` | 20,971,520 | 20 MiB | 80 MiB |
+| 4 | two IQ traces, `CH0+i*CH1`, `CH2+i*CH3` | 41,943,040 | 40 MiB | 160 MiB |
+
+These notify sizes are already far into the measured FIFO plateau. Interrupt overhead should not be the bottleneck for the planned `n_seg`.
+
+The limiting factor is sustained transfer rate versus trigger/pulse repetition period. If the pulse period is equal to the 1000 ns acquired segment duration:
+
+| Physical channels | Raw stream rate | Compare to measured 2.618 GiB/s plateau |
+| ---: | ---: | --- |
+| 2 | about 2441 MiB/s | technically below the benchmark, but only about 7 percent headroom before GPU copy/processing overhead |
+| 4 | about 4883 MiB/s | above the card benchmark; not viable as continuous 1 us-period FIFO streaming |
+
+Minimum repetition period implied by the measured FIFO plateau:
+
+```text
+2 physical channels: about 0.93 us minimum, before safety margin
+4 physical channels: about 1.86 us minimum, before safety margin
+```
+
+Practical recommendation:
+
+- Treat 2-channel IQ at a 1 us pulse period as near-limit. It should be tested early with the real GPU pipeline enabled, not only with the Spectrum internal FIFO speed test.
+- Treat 4-channel IQ at a 1 us pulse period as bandwidth-infeasible for continuous streaming. It needs lower average duty cycle, longer repetition period, lower sample rate, fewer samples, or a different acquisition strategy.
+- Add a build/test smoke benchmark that prints:
+  - active physical channel count,
+  - segment size,
+  - notify size,
+  - host buffer size,
+  - estimated raw MiB/s from repetition period,
+  - measured acquisition duration,
+  - overrun count/errors.
+
+This benchmark should be run before optimizing kernels, because no GPU optimization can compensate for a PCIe FIFO stream rate above the card/host transfer limit.
