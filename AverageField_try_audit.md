@@ -688,10 +688,16 @@ Required code architecture changes:
 - Replace `gpubuf = thrust::device_vector<char4>` with a generic raw `int8_t` GPU buffer or separate `char2`/`char4` specializations.
 - Replace `data1`, `data2`, `subtraction_data1`, `subtraction_data2`, etc. with arrays/vectors indexed by logical field.
 - Only expose results that make sense for the selected layout:
-  - `IQ1`: average field and self-products are valid; cross-channel G1/cross-power/S21 need a defined reference or should be unavailable.
+  - `IQ1`: average field and S21-style scalar/field-amplitude workflows are valid; cross-channel G1/G2/cross-power outputs are impossible because there is only one complex logical field.
   - `IQ2`: current two-field outputs remain valid.
   - `REAL2/REAL4`: downconversion/calibration semantics must be redefined.
 - Query channel count from the Spectrum handle if reliable, or pass it explicitly from Python where `dig_params["channels"]` is already known.
+
+Hard design rule:
+
+- Use 2 physical channel mode only for experiments that need average field and/or S21-like scalar results.
+- Use 4 physical channel mode for any cross-channel function: G1, G2, cross-power, cross-spectrum, or all-correlator experiments.
+- The Python wrapper should reject calls such as `get_g1_correlator()` and future `get_g2_correlator()` when constructed in 2-channel `IQ1` mode, instead of returning zeros or duplicated self-correlations.
 
 Recommended migration path:
 
