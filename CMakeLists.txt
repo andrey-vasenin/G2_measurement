@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(AverageField LANGUAGES CXX CUDA)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -65,3 +67,24 @@ if(AVERAGEFIELD_WITH_VISA)
     target_link_libraries(${PROJECT_NAME} PRIVATE "${VISA_LIBRARY}")
 endif()
 target_link_options(${PROJECT_NAME} PRIVATE "/NODEFAULTLIB:LIBCMT")
+
+set(AVERAGEFIELD_SMOKE_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/smoke_import.py")
+
+add_custom_target(smoke_import
+    COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    DEPENDS ${PROJECT_NAME}
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Import-smoke-testing AverageField"
+    VERBATIM
+)
+
+if(BUILD_TESTING)
+    add_test(
+        NAME averagefield_import
+        COMMAND "${Python_EXECUTABLE}" "${AVERAGEFIELD_SMOKE_SCRIPT}" --module "$<TARGET_FILE:${PROJECT_NAME}>"
+    )
+    set_tests_properties(averagefield_import PROPERTIES
+        LABELS "smoke"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+endif()

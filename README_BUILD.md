@@ -72,13 +72,25 @@ build\windows-qom-ninja\AverageField.cp313-win_amd64.pyd
 
 ## Import Smoke Test
 
-After building:
+The recommended no-hardware validation is the CMake smoke-import build preset. It builds `AverageField` if needed, then imports the produced `.pyd` directly:
+
+```bat
+cmake --build --preset windows-qom-smoke-import --verbose
+```
+
+You can also run the smoke test through CTest after building:
+
+```bat
+ctest --preset windows-qom-smoke
+```
+
+For direct debugging, the underlying script is still available:
 
 ```bat
 python tools\smoke_import.py --build-dir build\windows-qom-ninja
 ```
 
-The smoke test loads the built `.pyd` directly and prints the available `AverageFieldMeasurer` methods. It does not touch digitizer hardware.
+All three routes load the built `.pyd` and print or validate the available `AverageFieldMeasurer` methods. They do not touch digitizer hardware.
 
 ## Optional Deploy to QO Notebook Package
 

@@ -28,6 +28,33 @@
       "name": "windows-qom-release",
       "displayName": "Build Windows qom Release",
       "configurePreset": "windows-qom-ninja"
+    },
+    {
+      "name": "windows-qom-smoke-import",
+      "displayName": "Build and Smoke Import Windows qom",
+      "configurePreset": "windows-qom-ninja",
+      "targets": [
+        "smoke_import"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-qom-smoke",
+      "displayName": "CTest Smoke Windows qom",
+      "configurePreset": "windows-qom-ninja",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "smoke"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      }
     }
   ]
 }
