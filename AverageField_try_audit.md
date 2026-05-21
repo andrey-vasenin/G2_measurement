@@ -1089,7 +1089,129 @@ Practical recommendation:
 
 This benchmark should be run before optimizing kernels, because no GPU optimization can compensate for a PCIe FIFO stream rate above the card/host transfer limit.
 
-## 21. MeasurementPC Environment Snapshot
+## 21. Internet Research: Spectrum-to-GPU Transfer Architecture
+
+Research date: 2026-05-21. Sources checked:
+
+- [Spectrum SCAPP CUDA interface](https://spectrum-instrumentation.com/products/drivers_examples/scapp_cuda_interface.php)
+- [Spectrum SCAPP package PDF](https://spectrum-instrumentation.com/dl/spcm_scapp_english.pdf)
+- [Spectrum M4i.2212-x8 product page](https://spectrum-instrumentation.com/products/details/M4i2212-x8.php)
+- [Spectrum GPU block-averaging product note](https://spectrum-instrumentation.com/applications/product_notes/PN_Using_software_based_fast_block_averaging.php)
+- [NVIDIA CUDA C++ Best Practices Guide, data transfer section](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#data-transfer-between-host-and-device)
+- [NVIDIA GPUDirect RDMA documentation](https://docs.nvidia.com/cuda/gpudirect-rdma/)
+- [NVIDIA GPUDirect overview](https://developer.nvidia.com/gpudirect)
+
+### 21.1 Available Transfer Architectures
+
+Spectrum documents two relevant architectures:
+
+1. Standard FIFO: card DMA transfers acquisition data to a PC memory buffer. User code then copies or processes that host buffer. This is the path used by `Digitizer::prepareFifo()` with `SPCM_DIR_CARDTOPC`.
+2. SCAPP/RDMA: Spectrum card transfers directly into GPU memory allocated by `cudaMalloc()`, using `SPCM_DIR_CARDTOGPU`. This avoids staging raw data in host RAM.
+
+Spectrum also documents a critical platform limit: SCAPP RDMA is a Linux-only direct-transfer path. Under Windows, Spectrum says GPU processing is usable, but data must move through two DMA transfers: digitizer-to-PC and PC-to-GPU. Spectrum's SCAPP requirements also list Quadro/Tesla-class CUDA GPUs and explicitly exclude GeForce-class GPUs for that package. The current MeasurementPC is Windows 11 with a GeForce RTX 5090, so the direct RDMA path is not a practical target for this machine.
+
+NVIDIA's GPUDirect RDMA documentation matches this picture. GPUDirect RDMA is a Linux kernel-driver integration for third-party PCIe devices. It requires the peer device and GPU to be in a compatible PCIe topology, preferably behind PCIe switches rather than crossing CPU interconnects, and IOMMU translation can break or degrade the path unless configured appropriately. It also requires third-party driver support. For Spectrum, that driver support is SCAPP.
+
+Conclusion: on the current Windows/GeForce MeasurementPC, the best supported architecture is not card-to-GPU RDMA. It is the optimized two-hop path:
+
+```text
+Spectrum card DMA -> CUDA-pinned host FIFO buffer -> cudaMemcpyAsync/cudaMemcpy2DAsync -> GPU memory -> CUDA kernels
+```
+
+### 21.2 Is the Current Scheme Good?
+
+The current code is directionally good for the supported Windows path:
+
+- `dsp::createBuffer()` allocates the Spectrum FIFO buffer with `cudaMallocHost()`, giving page-locked host memory.
+- `Digitizer::prepareFifo()` passes that pinned buffer to the Spectrum driver through `spcm_dwDefTransfer_i64(..., SPCM_DIR_CARDTOPC, ...)`.
+- `dsp::copyDataFromBuffer()` uses `cudaMemcpy2DAsync()` from that host buffer into device memory.
+- CUDA work is spread across four non-default streams.
+- The notify size for planned production settings is much larger than the notify sizes where the Spectrum FIFO benchmark reaches its plateau.
+
+This matches NVIDIA's host-to-device transfer guidance: minimize host-device transfers, keep intermediate data on the GPU, batch transfers instead of issuing many small transfers, and use pinned/page-locked host memory for high bandwidth and true asynchronous overlap.
+
+However, the current code has two important limitations:
+
+1. The two-hop Windows path consumes both card-to-host bandwidth and host-to-GPU bandwidth. Even if the RTX 5090 host-to-device copy path is much faster than the M4i card, the raw data still crosses the host side of the PCIe/memory system twice.
+2. `Digitizer::launchFifo()` releases a Spectrum FIFO block immediately after `processor(buff_ptr)` returns. `processor` only queues `cudaMemcpy2DAsync()` and later GPU work. There is no event or synchronization proving that the host FIFO bytes are no longer needed before `SPC_DATA_AVAIL_CARD_LEN` gives the block back to the card. For correctness under sustained load, future code should either:
+   - synchronize the host-to-device copy before releasing that FIFO region, which is simple but reduces overlap, or
+   - copy into an explicit pinned staging ring and use CUDA events to release/reuse staging slots only after the async copy has completed.
+
+The second option is the better modernization path because it preserves overlap while making the buffer lifetime explicit.
+
+### 21.3 Bandwidth Budget for Current Settings
+
+For raw FIFO throughput, second oversampling does not reduce transfer pressure. It happens after data reaches the GPU. The transfer budget is set by:
+
+```text
+raw MiB/s = segment_samples * physical_channels * sample_bytes * trigger_rate / 2^20
+```
+
+Using the measured `segment_size=1248`, `period=1000 ns`, `sample_bytes=1`, and measured FIFO plateau `2618.5 MiB/s`:
+
+| Physical channels | Notify size at `n_seg=8192` | Raw stream | FIFO headroom | Status |
+| ---: | ---: | ---: | ---: | --- |
+| 2 | 19.50 MiB | 2380.4 MiB/s | +10.0% | Near limit |
+| 4 | 39.00 MiB | 4760.7 MiB/s | -45.0% | Over limit |
+
+With a 20% operating margin, the minimum pulse period implied by the measured FIFO plateau is about:
+
+| Physical channels | No-margin minimum period | 20% margin minimum period |
+| ---: | ---: | ---: |
+| 2 | 909 ns | 1136 ns |
+| 4 | 1818 ns | 2273 ns |
+
+This means:
+
+- 2 physical channels at 1 us repetition is possible only as a near-limit case. It needs end-to-end testing with GPU processing enabled and overrun counting.
+- 4 physical channels at 1 us repetition is not possible as continuous FIFO streaming on the measured card/host path. Kernel optimization cannot fix a raw stream that exceeds the card-to-host transfer ceiling.
+- For 4 physical channels, use longer repetition period, smaller segment, lower sample rate, fewer physical channels, gated/lower-duty acquisition, or a different acquisition architecture.
+
+### 21.4 Reusable Transfer Budget Tool
+
+The development branch now includes a no-hardware calculator:
+
+```bat
+python tools\transfer_budget.py
+```
+
+Default output for the current MeasurementPC benchmark/settings:
+
+```text
+channels  notify MiB  host buffer MiB  raw MiB/s  headroom %  min period ns  min safe ns  status
+       2       19.50            78.00     2380.4        10.0            909         1136  NEAR
+       4       39.00           156.00     4760.7       -45.0           1818         2273  OVER
+```
+
+Useful variants:
+
+```bat
+python tools\transfer_budget.py --period-ns 1500
+python tools\transfer_budget.py --segment-samples 1248 --n-seg 1024 --channels 2 4
+python tools\transfer_budget.py --fifo-mib-s 2618.5 --period-ns 1000 --fail-on-over
+```
+
+This calculator is not a replacement for a hardware test. It is a guardrail: if it says `OVER`, no DSP optimization can make the chosen continuous acquisition settings reliable.
+
+### 21.5 Recommended MeasurementPC Tests
+
+1. Keep the Spectrum Control Center FIFO speed test in the validation checklist. It measures the card-to-host leg and already found the practical plateau near `2.62 GiB/s`.
+2. Run NVIDIA's CUDA `bandwidthTest` sample, if CUDA samples are installed or built, to measure pinned host-to-device bandwidth on the RTX 5090. The expected host-to-GPU bandwidth should be well above the M4i card-to-host bandwidth; if not, the GPU PCIe path or driver mode needs attention.
+3. Add a future end-to-end FIFO benchmark inside this project after fixing async buffer lifetime. It should report elapsed time, overrun count, average `SPC_DATA_AVAIL_USER_LEN`, GPU copy timing via CUDA events, and processing timing per FIFO block.
+4. Use Nsight Systems for one short run after the staging/event fix. The timeline should show card waits, host-to-device copies, and kernels overlapping without reusing FIFO memory before copy completion.
+
+### 21.6 Modernization Recommendation
+
+For this project and current hardware, optimize the Windows two-hop pipeline first:
+
+- Make FIFO block lifetime correct with CUDA events or an explicit staging ring.
+- Keep notify sizes above the measured FIFO plateau but reduce `n_seg` when low-latency dynamic plotting is needed. Even `n_seg=512` gives multi-MiB notifies for the current segment size, which should remain above the interrupt-overhead region.
+- Add mode-level transfer checks before measurement start. Reject 4-channel continuous 1 us-period settings unless the user explicitly accepts expected overruns or the repetition period/duty cycle makes the average stream rate safe.
+- Keep all reduction outputs on GPU until getters are called; do not copy intermediate traces back to Python during acquisition unless they are needed for plotting.
+
+Changing to true Spectrum-to-GPU RDMA would be a platform project, not a small code optimization. It would likely require Linux, SCAPP licensing/support, a supported professional NVIDIA GPU class per Spectrum's SCAPP requirements, correct PCIe topology, and Spectrum/NVIDIA kernel-driver setup. That may be attractive for a future dedicated acquisition PC, but it is not the next best step for the current Windows RTX 5090 workflow.
+
+## 22. MeasurementPC Environment Snapshot
 
 Environment information reported from MeasurementPC on 2026-05-21:
 
