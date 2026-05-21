@@ -4,7 +4,7 @@
 #include "dsp.cuh"
 
 struct complex_conjugate {
-   __device__ inline tcf operator()(thrust::complex<float>& x) const {
+    __device__ inline tcf operator()(const tcf& x) const {
         return thrust::conj(x);
     }
 };

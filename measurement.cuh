@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <cstdint>
+#include <tuple>
 #include "digitizer.h"
 #include "dsp.cuh"
 #include "pinned_allocator.cuh"
@@ -89,6 +90,8 @@ public:
     void setTestInput(const std::vector<int8_t> &input);
 
     corr_t getG1Correlator();
+
+    std::tuple<corr_t, corr_t, corr_t> getG1OtherCorrelators();
 
     std::pair<stdvec_c, stdvec_c> getAverageField();
 

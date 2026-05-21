@@ -249,6 +249,29 @@ corr_t Measurement::getG1Correlator()
     return avg_glr;
 }
 
+std::tuple<corr_t, corr_t, corr_t> Measurement::getG1OtherCorrelators()
+{
+    int side = processor->getResampledTraceLength();
+    corr_t reordered(side, trace_t(side));
+    corr_t creation(side, trace_t(side));
+    corr_t annihilation(side, trace_t(side));
+
+    auto [reordered_corrs, creation_corrs, annihilation_corrs] = processor->getG1OtherResults();
+
+    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    for (int t1 = 0; t1 < side; t1++)
+    {
+        for (int t2 = 0; t2 < side; t2++)
+        {
+            reordered[t1][t2] = std::complex<float>(reordered_corrs[t1 * side + t2] / X);
+            creation[t1][t2] = std::complex<float>(creation_corrs[t1 * side + t2] / X);
+            annihilation[t1][t2] = std::complex<float>(annihilation_corrs[t1 * side + t2] / X);
+        }
+    }
+
+    return { reordered, creation, annihilation };
+}
+
 std::pair<stdvec_c, stdvec_c> Measurement::getAverageField()
 {
     int length = processor->getResampledTraceLength();

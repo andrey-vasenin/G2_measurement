@@ -9,6 +9,7 @@
 #include <cuComplex.h>
 #include <vector>
 #include <complex>
+#include <tuple>
 #include <cufft.h>
 #include <cublas_v2.h>
 #include <thrust/device_vector.h>
@@ -60,7 +61,9 @@ class dsp
     gpuvec_c data1[num_streams];
     gpuvec_c data2[num_streams];
     gpuvec_c data1_resampled[num_streams];
+    gpuvec_c data1_resampled_conj[num_streams];
     gpuvec_c data2_resampled[num_streams];
+    gpuvec_c data2_resampled_conj[num_streams];
     gpuvec_c subtraction_data1[num_streams];
     gpuvec_c subtraction_data2[num_streams];
     gpuvec_c data_for_correlation1[num_streams];
@@ -70,8 +73,9 @@ class dsp
 
     gpuvec_c interference_out[num_streams];
     gpuvec_c g1[num_streams];
-    gpuvec_c g1_cross_out[num_streams];
-    gpuvec_c g1_filt_conj[num_streams];
+    gpuvec_c g1_annihilation[num_streams];
+    gpuvec_c g1_creation[num_streams];
+    gpuvec_c g1_reordered[num_streams];
     gpuvec_c g1_filt[num_streams];
     gpuvec_c g2_out[num_streams];
     gpuvec_c g2_out_cross_segment[num_streams];
@@ -122,6 +126,7 @@ private:
     const cuComplex alpha = make_cuComplex(1, 0);
     const cuComplex beta = make_cuComplex(1, 0);
     const float beta_float = 1.0;
+    cublasOperation_t op_n = CUBLAS_OP_N;
     cublasOperation_t op_t = CUBLAS_OP_T;
     cublasOperation_t op_c = CUBLAS_OP_C;
 
@@ -182,6 +187,8 @@ public:
     hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
 
     hostvec_c getG1Result();
+
+    std::tuple<hostvec_c, hostvec_c, hostvec_c> getG1OtherResults();
 
     std::pair<stdvec_c, stdvec_c> getAverageField();
 
@@ -264,7 +271,7 @@ protected:
 
     void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
 
-    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, cublasOperation_t &op);
+    void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, cublasOperation_t &op_1, cublasOperation_t &op_2);
 
     void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
 

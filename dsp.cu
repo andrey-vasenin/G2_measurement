@@ -128,7 +128,9 @@ dsp::dsp(size_t len, uint64_t n, double part,
         data1[i].resize(total_length, tcf(0.f));
         data2[i].resize(total_length, tcf(0.f));
         data1_resampled[i].resize(resampled_total_length, tcf(0.f));
+        data1_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
         data2_resampled[i].resize(resampled_total_length, tcf(0.f));
+        data2_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
 
         subtraction_data1[i].resize(resampled_total_length, tcf(0.f));
         subtraction_data2[i].resize(resampled_total_length, tcf(0.f));
@@ -141,8 +143,9 @@ dsp::dsp(size_t len, uint64_t n, double part,
 
         // trace_out[i].resize(resampled_total_length, tcf(0.f));
 
-        // g1_cross_out[i].resize(out_size, tcf(0.f));
-        // g1_filt_conj[i].resize(out_size, tcf(0.f));
+        g1_annihilation[i].resize(out_size, tcf(0.f));
+        g1_creation[i].resize(out_size, tcf(0.f));
+        g1_reordered[i].resize(out_size, tcf(0.f));
         // g1_filt[i].resize(out_size, tcf(0.f));
         // g2_out[i].resize(out_size, tcf(0.f));
         // g2_out_cross_segment[i].resize(out_size, tcf(0.f));
@@ -384,8 +387,9 @@ void dsp::resetOutput()
         thrust::fill(subtraction_data1[i].begin(), subtraction_data1[i].end(), tcf(0));
         thrust::fill(subtraction_data2[i].begin(), subtraction_data2[i].end(), tcf(0));
         thrust::fill(g1[i].begin(), g1[i].end(), tcf(0));
-        // thrust::fill(g1_cross_out[i].begin(), g1_cross_out[i].end(), tcf(0));
-        // thrust::fill(g1_filt_conj[i].begin(), g1_filt_conj[i].end(), tcf(0));
+        thrust::fill(g1_annihilation[i].begin(), g1_annihilation[i].end(), tcf(0));
+        thrust::fill(g1_creation[i].begin(), g1_creation[i].end(), tcf(0));
+        thrust::fill(g1_reordered[i].begin(), g1_reordered[i].end(), tcf(0));
         // thrust::fill(g1_filt[i].begin(), g1_filt[i].end(), tcf(0));
         // thrust::fill(g2_out[i].begin(), g2_out[i].end(), tcf(0));
         // thrust::fill(g2_out_cross_segment[i].begin(), g2_out_cross_segment[i].end(), tcf(0));
@@ -419,6 +423,10 @@ void dsp::compute(const hostbuf buffer_ptr)
     resample(data1[stream_num], data1_resampled[stream_num], streams[stream_num]);
     subtractDataFromOutput(subtraction_trace1, data1_resampled[stream_num], stream_num);
     addDataToOutput(data1_resampled[stream_num], subtraction_data1[stream_num], stream_num);
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+        data1_resampled[stream_num].begin(), data1_resampled[stream_num].end(),
+        data1_resampled_conj[stream_num].begin(),
+        complex_conjugate());
 
     // Preprocessing Data 2
     applyDownConversionCalibration(data2[stream_num], streams[stream_num], 1);
@@ -427,8 +435,16 @@ void dsp::compute(const hostbuf buffer_ptr)
     resample(data2[stream_num], data2_resampled[stream_num], streams[stream_num]);
     subtractDataFromOutput(subtraction_trace2, data2_resampled[stream_num], stream_num);
     addDataToOutput(data2_resampled[stream_num], subtraction_data2[stream_num], stream_num);
+    thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+        data2_resampled[stream_num].begin(), data2_resampled[stream_num].end(),
+        data2_resampled_conj[stream_num].begin(),
+        complex_conjugate());
     
-    calculateG1gemm(data1_resampled[stream_num], data2_resampled[stream_num], g1[stream_num], cublas_handles[stream_num], op_c); // <S1* S2>
+    
+    calculateG1gemm(data1_resampled[stream_num], data2_resampled_conj[stream_num], g1[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2>
+    calculateG1gemm(data1_resampled[stream_num], data2_resampled[stream_num], g1_annihilation[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1 S2>
+    calculateG1gemm(data2_resampled_conj[stream_num], data1_resampled_conj[stream_num], g1_creation[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
+    calculateG1gemm(data2_resampled_conj[stream_num], data1_resampled[stream_num], g1_reordered[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
     // // Filtering left sideband
     // copyData(data1_resampled[stream_num], data_for_correlation1[stream_num], streams[stream_num]);
     // applyFilter(data_for_correlation1[stream_num], corr_firwin1, stream_num, resampled_trace_length, corr_plans[stream_num]);
@@ -474,8 +490,8 @@ void dsp::compute(const hostbuf buffer_ptr)
     // applyFilter(data_without_central_peak2[stream_num], center_peak_win, stream_num, resampled_trace_length, corr_plans[stream_num]);
 
     // calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt[stream_num], cublas_handles[stream_num], op_t); // <S1 S2>
-    // calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt_conj[stream_num], cublas_handles[stream_num], op_c); // <S1* S2>
-    // calculateG1gemm(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], g1_cross_out[stream_num], cublas_handles[stream_num], op_c); // correlation without central peak
+    // calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_creation[stream_num], cublas_handles[stream_num], op_c); // <S1* S2>
+    // calculateG1gemm(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], g1_annihilation[stream_num], cublas_handles[stream_num], op_c); // correlation without central peak
 }
 
 void dsp::copyData(gpuvec_c& source, gpuvec_c& dist, cudaStream_t& stream)
@@ -629,12 +645,12 @@ void dsp::calculateG1(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublas
         "Error of rank-1 update (data) with code #"s + std::to_string(cublas_status));
 }
 
-void dsp::calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t& handle, cublasOperation_t& op)
+void dsp::calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t& handle, cublasOperation_t& op_1, cublasOperation_t& op_2)
 {
     using namespace std::string_literals;
     // Compute correlation for the signal and add it to the output
     auto cublas_status = cublasCgemm3m(handle,
-        CUBLAS_OP_N, op, resampled_trace_length, resampled_trace_length, batch_size,
+        op_1, op_2, resampled_trace_length, resampled_trace_length, batch_size,
         &alpha, reinterpret_cast<cuComplex*>(thrust::raw_pointer_cast(data1.data())), resampled_trace_length,
         reinterpret_cast<cuComplex*>(thrust::raw_pointer_cast(data2.data())), resampled_trace_length,
         &beta, reinterpret_cast<cuComplex*>(thrust::raw_pointer_cast(output.data())), resampled_trace_length);
@@ -768,6 +784,15 @@ hostvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
 hostvec_c dsp::getG1Result()
 {
     return getCumulativeTrace(g1, tcf(batch_size));
+}
+
+std::tuple<hostvec_c, hostvec_c, hostvec_c> dsp::getG1OtherResults()
+{
+    return {
+        getCumulativeTrace(g1_reordered, tcf(batch_size)),
+        getCumulativeTrace(g1_creation, tcf(batch_size)),
+        getCumulativeTrace(g1_annihilation, tcf(batch_size))
+    };
 }
 
 __global__ void sumTracesReduce(
@@ -952,7 +977,7 @@ hostvec_c dsp::getCrossSpectrum()
 
 // hostvec_c dsp::getG1CrossResult()
 // {
-//     return getCumulativeTrace(g1_cross_out, tcf(batch_size));
+//     return getCumulativeTrace(g1_annihilation, tcf(batch_size));
 // }
 
 // hostvec_c dsp::getG1FiltResult()
@@ -962,7 +987,7 @@ hostvec_c dsp::getCrossSpectrum()
 
 // hostvec_c dsp::getG1FiltConjResult()
 // {
-//     return getCumulativeTrace(g1_filt_conj, tcf(batch_size));
+//     return getCumulativeTrace(g1_creation, tcf(batch_size));
 // }
 
 // hostvec_c dsp::getG2FullResult()
