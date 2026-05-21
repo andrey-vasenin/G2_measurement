@@ -21,7 +21,7 @@
 
 
 
-Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
                          int second_oversampling)
 {
     dig = dig_;
@@ -33,7 +33,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     notify_size = 2 * num_channels * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000); // ms
-    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
+    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling);
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -60,15 +60,15 @@ void Measurement::setDigParameters()
 
 }
 
-Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
+Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
                          int second_oversampling)
-    : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch, part,
+    : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch,
                   second_oversampling)
 {
 }
 
 // Constructor for test measurement
-Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
+Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
                 int second_oversampling)
 {
     dig = nullptr;
@@ -78,7 +78,7 @@ Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double
     sampling_rate = 1.25E+9/dig_oversampling;
     setAveragesNumber(averages);
     notify_size = 2 * num_channels * segment_size * batch_size;
-    processor = new dsp(segment_size, batch_size, part, sampling_rate, second_oversampling);
+    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling);
     initializeBuffer();
 
     func = [this](int8_t *data) mutable

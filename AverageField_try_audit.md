@@ -122,11 +122,13 @@ AverageField.AverageFieldMeasurer
 
 Exposed methods:
 
-- Constructor: `AverageFieldMeasurer(unsigned long long, unsigned long long, long, float, int)`
+- Constructors:
+  - `AverageFieldMeasurer(digitizer_handle, averages, batch, second_oversampling)`
+  - `AverageFieldMeasurer(averages, batch, segment, digitizer_oversampling, second_oversampling)`
 - Configuration: `set_calibration`, `set_firwin`, `set_corr_downconvert_freqs`, `set_amplitude`, `set_intermediate_frequency`, `set_averages_number`, `set_subtraction_trace`
 - Execution: `measure`, `measure_test`, `reset`, `reset_output`, `free`
 - Results: `get_g1_correlator`, `get_g1_other_correlators`, `get_average_field`, `get_s21`, `get_cross_power`, `get_cross_spectrum`, `get_subtraction_trace`, `get_subtraction_data`
-- Shape helpers: `get_total_length`, `get_trace_length`, `get_out_size`, `get_notify_size`
+- Shape helpers: `get_total_length`, `get_trace_length`, `get_resampled_trace_length`, `get_out_size`, `get_notify_size`
 
 Wrapper behavior in `/Users/vvvoskr/Projects/QO-measurements/lib2/quantumOptics/averageFieldWrapper.py`:
 
@@ -138,8 +140,8 @@ Wrapper behavior in `/Users/vvvoskr/Projects/QO-measurements/lib2/quantumOptics/
 
 API drift to note:
 
-- The pybind constructor comment says "for test inputs with out digitizer", but the active 5-argument signature matches the handle-based constructor on Windows x64. The real test-input constructor in `Measurement` has 6 arguments and is not exposed by the binding.
-- `AverageFieldWrapper.from_test_inputs(...)` calls a 6-argument constructor that is not exposed by this branch's `binding.cpp`.
+- Older wrapper code that passes `part=1` needs to be updated; the dev-branch native API now treats the full digitizer segment as the trace and no longer exposes a `part` constructor parameter.
+- `AverageFieldWrapper.from_test_inputs(...)` must call the 5-argument no-hardware constructor: `(averages, batch, segment, digitizer_oversampling, second_oversampling)`.
 - `AverageFieldWrapper.from_digitizer(...)` assumes a `Digitizer*`/object-pointer overload, but pybind does not expose `Measurement(Digitizer*)`.
 - `set_corr_downconvert_freqs` is exposed, but the active `dsp::compute` path does not call `calculateInterference`, so those coefficients are currently unused for the exposed average-field/G1/cross-power/cross-spectrum outputs.
 - G2-related getters exist in commented code and `main.cpp`, but are not active pybind API in this branch.
@@ -158,7 +160,7 @@ For a measurement:
 ```text
 segment_size              = digitizer SPC_SEGMENTSIZE
 batch_size                = segments per GPU batch
-trace_length              = round(segment_size * part)
+trace_length              = segment_size
 oversampling              = second_oversampling
 resampled_trace_length    = trace_length / oversampling
 total_length              = batch_size * trace_length
@@ -284,7 +286,6 @@ afw = AverageFieldWrapper.from_handle(
     ctypes.addressof(dig.h_card.contents),
     averages=1 << 13 ... 1 << 28,
     batch=int(dig_params["n_seg"]),
-    part=1,
     second_oversampling=1,
 )
 afw.set_firwin(...)

@@ -44,13 +44,13 @@ private:
     proc_t func_ult_calib;
 
 public:
-    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch, double part,
+    Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
                 int second_oversampling);
 
-    Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, double part,
+    Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
                 int second_oversampling);
 
-    Measurement(uint64_t averages, uint64_t batch, long segment, double part, int dig_oversampling,
+    Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
                 int second_oversampling);
     
     void setDigParameters();

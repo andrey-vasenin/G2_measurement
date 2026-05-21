@@ -18,12 +18,11 @@ using namespace pybind11::literals;
 PYBIND11_MODULE(AverageField, m)
 {
     py::class_<Measurement>(m, "AverageFieldMeasurer", py::module_local())
-        // .def(py::init<std::uintptr_t, unsigned long long, unsigned long long, double, int, const char *>(), output_and_gil_guard())
-        .def(py::init<std::uintptr_t, uint64_t, uint64_t, double, int>(),
-             "digitizer_handle"_a, "averages"_a, "batch"_a, "part"_a, "second_oversampling"_a,
+        .def(py::init<std::uintptr_t, uint64_t, uint64_t, int>(),
+             "digitizer_handle"_a, "averages"_a, "batch"_a, "second_oversampling"_a,
              output_and_gil_guard())
-        .def(py::init<uint64_t, uint64_t, long, double, int, int>(),
-             "averages"_a, "batch"_a, "segment"_a, "part"_a, "digitizer_oversampling"_a, "second_oversampling"_a,
+        .def(py::init<uint64_t, uint64_t, long, int, int>(),
+             "averages"_a, "batch"_a, "segment"_a, "digitizer_oversampling"_a, "second_oversampling"_a,
              output_and_gil_guard())
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", py::overload_cast<float, float>(&Measurement::setFirwin), output_and_gil_guard(), "Set rectangular window")

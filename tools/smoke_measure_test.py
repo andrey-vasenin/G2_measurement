@@ -110,7 +110,6 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
         averages,
         batch,
         segment,
-        1.0,
         1,
         second_oversampling,
     )

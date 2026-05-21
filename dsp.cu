@@ -76,8 +76,8 @@ inline void print_vector(thrust::device_vector<T>& vec, int n)
 // }
 
 // DSP constructor
-dsp::dsp(size_t len, uint64_t n, double part,
-    double samplerate, int second_oversampling) : trace_length{ static_cast<size_t>(std::round((double)len * part)) }, // Length of a signal or noise trace
+dsp::dsp(size_t len, uint64_t n,
+    double samplerate, int second_oversampling) : trace_length{ len }, // Length of a signal or noise trace
     batch_size{ n },                                                     // Number of segments in a buffer (same: number of traces in data)
     total_length{ batch_size * trace_length },
     oversampling{ second_oversampling },

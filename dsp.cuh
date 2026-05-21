@@ -148,7 +148,7 @@ private:
     float a_qi[num_channels], a_qq[num_channels], c_i[num_channels], c_q[num_channels];
 
 public:
-    dsp(size_t len, uint64_t n, double part, double samplerate, int second_oversampling);
+    dsp(size_t len, uint64_t n, double samplerate, int second_oversampling);
 
     ~dsp();
 
