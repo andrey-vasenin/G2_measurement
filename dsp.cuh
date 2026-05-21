@@ -132,6 +132,7 @@ private:
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
+    cudaEvent_t input_copy_done[num_streams];
 
     /* cuFFT required variables */
     cufftHandle plans[num_streams];
@@ -180,7 +181,9 @@ public:
 
     void resetOutput();
 
-    void compute(const hostbuf buffer_ptr);
+    int compute(const hostbuf buffer_ptr);
+
+    void waitInputCopy(int stream_num);
 
     std::vector<hostvec_c> getCumulativeSubtrData();
   

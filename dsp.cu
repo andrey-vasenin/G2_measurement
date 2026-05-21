@@ -112,6 +112,7 @@ dsp::dsp(size_t len, uint64_t n, double part,
         gpu_data_buf[i].resize(total_length, char4{ 0,0,0,0 });
         // Create streams for parallel data processing
         handleError(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
+        handleError(cudaEventCreateWithFlags(&input_copy_done[i], cudaEventDisableTiming));
         // check_npp_error(initNppStreamContext(&streamContexts[i], streams[i]), "Npp Error GetStreamContext");
         streamContexts[i].nCudaDeviceId = device_id;
         streamContexts[i].nMultiProcessorCount = prop.multiProcessorCount;
@@ -204,6 +205,7 @@ dsp::~dsp()
         cufftDestroy(corr_plans[i]);
 
         // Destroy GPU streams
+        handleError(cudaEventDestroy(input_copy_done[i]));
         handleError(cudaStreamDestroy(streams[i]));
     }
 }
@@ -408,7 +410,7 @@ void dsp::resetOutput()
     }
 }
 
-void dsp::compute(const hostbuf buffer_ptr)
+int dsp::compute(const hostbuf buffer_ptr)
 {
     const int stream_num = semaphore;
     switchStream();
@@ -492,6 +494,13 @@ void dsp::compute(const hostbuf buffer_ptr)
     // calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_filt[stream_num], cublas_handles[stream_num], op_t); // <S1 S2>
     // calculateG1gemm(data_for_correlation1[stream_num], data_for_correlation2[stream_num], g1_creation[stream_num], cublas_handles[stream_num], op_c); // <S1* S2>
     // calculateG1gemm(data_without_central_peak1[stream_num], data_without_central_peak2[stream_num], g1_annihilation[stream_num], cublas_handles[stream_num], op_c); // correlation without central peak
+
+    return stream_num;
+}
+
+void dsp::waitInputCopy(int stream_num)
+{
+    handleError(cudaEventSynchronize(input_copy_done[stream_num]));
 }
 
 void dsp::copyData(gpuvec_c& source, gpuvec_c& dist, cudaStream_t& stream)
@@ -510,6 +519,7 @@ void dsp::copyDataFromBuffer(const hostbuf buffer_ptr,
     handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
         static_cast<const void*>(buffer_ptr), src_pitch, width, height,
         cudaMemcpyHostToDevice, streams[stream_num]));
+    handleError(cudaEventRecord(input_copy_done[stream_num], streams[stream_num]));
     // cudaMemcpyAsync(thrust::raw_pointer_cast(dst.data()), reinterpret_cast<const void *>(buffer_ptr),
     //                 total_length * sizeof(char4), cudaMemcpyHostToDevice, streams[stream_num]);
 }

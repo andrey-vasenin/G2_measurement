@@ -37,7 +37,10 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch, dou
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
-    { processor->compute(data); };
+    {
+        int stream_num = processor->compute(data);
+        processor->waitInputCopy(stream_num);
+    };
 
     int trace_length = processor->getTraceLength();
 
@@ -79,7 +82,10 @@ Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, double
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
-    { processor->compute(data); };
+    {
+        int stream_num = processor->compute(data);
+        processor->waitInputCopy(stream_num);
+    };
     int trace_length = processor->getTraceLength();
 
     test_input.resize(notify_size, 0);

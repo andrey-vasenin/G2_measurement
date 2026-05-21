@@ -343,6 +343,8 @@ Modernization target:
 - At minimum, synchronize or record/wait an event for the host-to-device copy before releasing that FIFO span.
 - Better: use explicit staging buffers or a small host-buffer pool with CUDA events so DMA and GPU copy overlap safely.
 
+Dev branch update: this has been mitigated by recording a per-stream CUDA event immediately after `cudaMemcpy2DAsync()` and waiting for that copy event before `processor(buff_ptr)` returns to the Spectrum FIFO loop. This protects the Spectrum FIFO span without waiting for the full downstream DSP pipeline.
+
 ### 8.3 Potential Getter Synchronization Race
 
 The compute path uses `cudaStreamCreateWithFlags(..., cudaStreamNonBlocking)`. Several getters launch default-stream reduction kernels or `cudaMemcpy` without first synchronizing the nonblocking compute streams:
@@ -1130,14 +1132,12 @@ The current code is directionally good for the supported Windows path:
 
 This matches NVIDIA's host-to-device transfer guidance: minimize host-device transfers, keep intermediate data on the GPU, batch transfers instead of issuing many small transfers, and use pinned/page-locked host memory for high bandwidth and true asynchronous overlap.
 
-However, the current code has two important limitations:
+However, the original audited code has two important limitations:
 
 1. The two-hop Windows path consumes both card-to-host bandwidth and host-to-GPU bandwidth. Even if the RTX 5090 host-to-device copy path is much faster than the M4i card, the raw data still crosses the host side of the PCIe/memory system twice.
-2. `Digitizer::launchFifo()` releases a Spectrum FIFO block immediately after `processor(buff_ptr)` returns. `processor` only queues `cudaMemcpy2DAsync()` and later GPU work. There is no event or synchronization proving that the host FIFO bytes are no longer needed before `SPC_DATA_AVAIL_CARD_LEN` gives the block back to the card. For correctness under sustained load, future code should either:
-   - synchronize the host-to-device copy before releasing that FIFO region, which is simple but reduces overlap, or
-   - copy into an explicit pinned staging ring and use CUDA events to release/reuse staging slots only after the async copy has completed.
+2. In the original audited code, `Digitizer::launchFifo()` released a Spectrum FIFO block immediately after `processor(buff_ptr)` returned, while `processor` only queued `cudaMemcpy2DAsync()` and later GPU work. The dev branch now records a per-stream input-copy event and waits for that event before the FIFO block is returned to the card.
 
-The second option is the better modernization path because it preserves overlap while making the buffer lifetime explicit.
+The event wait is a minimal correctness fix. A future explicit staging ring could still be useful for deeper profiling and better control of card-DMA, host-to-GPU copy, and kernel overlap.
 
 ### 21.3 Bandwidth Budget for Current Settings
 
