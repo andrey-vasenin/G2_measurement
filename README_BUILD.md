@@ -80,9 +80,9 @@ python tools\smoke_import.py --build-dir build\windows-qom-ninja
 
 The smoke test loads the built `.pyd` directly and prints the available `AverageFieldMeasurer` methods. It does not touch digitizer hardware.
 
-## Deploy to QO Notebook Package
+## Optional Deploy to QO Notebook Package
 
-After a successful build and smoke test, copy the built `.pyd` into the QO package:
+The smoke test above is enough to verify that the build produced an importable module. Copy the built `.pyd` into the QO package only when you want notebooks in `QO-measurements` to use this newly built binary:
 
 ```bat
 copy /Y build\windows-qom-ninja\AverageField.cp313-win_amd64.pyd C:\Users\Qop\QO-measurements\lib2\quantumOptics\
