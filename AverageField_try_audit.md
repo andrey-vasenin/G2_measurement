@@ -347,16 +347,16 @@ Dev branch update: this has been mitigated by recording a per-stream CUDA event 
 
 ### 8.3 Potential Getter Synchronization Race
 
-The compute path uses `cudaStreamCreateWithFlags(..., cudaStreamNonBlocking)`. Several getters launch default-stream reduction kernels or `cudaMemcpy` without first synchronizing the nonblocking compute streams:
+Before the dev-branch fix, the compute path used `cudaStreamCreateWithFlags(..., cudaStreamNonBlocking)` and several getters launched default-stream reduction kernels or `cudaMemcpy` without first synchronizing the nonblocking compute streams:
 
 - `dsp::getAverageField`
 - `dsp::getS21`
 - `dsp::getCrossPower`
 - `dsp::getCrossSpectrum`
 
-`getG1Result` and `getG1OtherResults` call `cudaDeviceSynchronize()` indirectly through `getCumulativeTrace`, so they are less exposed.
+`getG1Result` and `getG1OtherResults` called `cudaDeviceSynchronize()` indirectly through `getCumulativeTrace`, so they were less exposed.
 
-Impact:
+Original impact:
 
 - Calling `get_average_field()` immediately after `measure()` can read incomplete accumulated data.
 - Notebook examples often call `get_average_field()` first, before any getter that synchronizes all streams.
@@ -367,11 +367,13 @@ Modernization target:
 - Add a single explicit `dsp::synchronize()` after measurement completion or at the start of every getter.
 - Prefer stream events if you want to preserve overlap and avoid global `cudaDeviceSynchronize()`.
 
+Dev branch update: this has been addressed for the GPU-reading getters. `dsp::synchronize()` now synchronizes the four nonblocking compute streams, and the average-field, S21, cross-power, cross-spectrum, cumulative correlator, cumulative subtraction-data, and subtraction-trace getters call it before reducing or copying GPU results to host memory.
+
 ### 8.4 `getAverageField` Has a Second-Oversampling Shape Bug
 
-`dsp` allocates `tmp1` and `tmp2` with `resampled_trace_length`, but `dsp::getAverageField()` launches and copies using `getTraceLength()`. If `second_oversampling > 1`, this can write/copy past the temporary buffer and return the wrong vector length.
+Before the dev-branch fix, `dsp` allocated `tmp1` and `tmp2` with `resampled_trace_length`, but `dsp::getAverageField()` launched and copied using `getTraceLength()`. If `second_oversampling > 1`, this could write/copy past the temporary buffer and return the wrong vector length.
 
-Impact:
+Original impact:
 
 - Current notebook examples pass `second_oversampling=1`, so this is dormant there.
 - The API advertises oversampling values 1, 2, and 4 through `resample`; future use with 2 or 4 is unsafe.
@@ -380,6 +382,8 @@ Modernization target:
 
 - Use `getResampledTraceLength()` consistently for average-field reduction, host vector allocation, kernel grid, and copy size.
 - Add tests for `second_oversampling = 1, 2, 4`.
+
+Dev branch update: `dsp::getAverageField()` now uses `getResampledTraceLength()` for host allocation, kernel launch length, reduction stride, and device-to-host copy size. The synthetic `measure_test` smoke regression now exercises `second_oversampling = 1, 2, 4` by default and checks the new `get_resampled_trace_length()` binding.
 
 ### 8.5 Error Checking Is Mostly Disabled for cuFFT/cuBLAS/NPP
 
@@ -460,9 +464,9 @@ Modernization target:
 
 ### 8.9 Getter Return Types Are Costly
 
-`Measurement::getG1Correlator` builds `std::vector<std::vector<std::complex<double>>>`, while the GPU data is `thrust::complex<float>`. The wrapper then converts this nested Python sequence into NumPy.
+Before the dev-branch fix, `Measurement::getG1Correlator` built `std::vector<std::vector<std::complex<double>>>`, while the GPU data was `thrust::complex<float>`. The wrapper then converted this nested Python sequence into NumPy.
 
-Impact:
+Original impact:
 
 - Large G1 matrices cause expensive GPU-to-host copy, C++ vector construction, Python object creation, and NumPy conversion.
 - For trace lengths in the hundreds or thousands, this becomes a significant bottleneck and memory pressure point.
@@ -472,6 +476,8 @@ Modernization target:
 - Return NumPy arrays directly via pybind11 buffer/array APIs.
 - Prefer `complex64` unless analysis genuinely requires `complex128`.
 - For very large correlators, consider chunked result transfer or HDF5 direct writing.
+
+Dev branch update: the nested G1/G1-other Python-facing matrix type has been narrowed from `std::complex<double>` to `std::complex<float>`, matching the CUDA `thrust::complex<float>` accumulators and avoiding an unnecessary precision widening. The getters still return nested C++ vectors, so direct NumPy array return remains a later API modernization step.
 
 ### 8.10 Input Validation Is Thin
 
@@ -625,10 +631,8 @@ Current state:
 Required fixes before production use:
 
 - `trace_length % second_oversampling == 0` must be validated. Otherwise flattened strided ranges can mix samples across segment boundaries.
-- `getAverageField` must use `resampled_trace_length`, not `trace_length`.
-- Python-facing shape helpers need clarification:
-  - Either keep `get_trace_length()` as raw input length and add `get_resampled_trace_length()`;
-  - or redefine `get_trace_length()` to mean output trace length and add `get_raw_trace_length()`.
+- `getAverageField` must use `resampled_trace_length`, not `trace_length`. Done on the dev branch.
+- Python-facing shape helpers need clarification. The dev branch keeps `get_trace_length()` as raw input length and adds `get_resampled_trace_length()` for processed output length.
 - Plotting axes in `averageFieldWrapper.py` must include both digitizer oversampling and second-stage oversampling:
 
 ```text

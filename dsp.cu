@@ -503,6 +503,12 @@ void dsp::waitInputCopy(int stream_num)
     handleError(cudaEventSynchronize(input_copy_done[stream_num]));
 }
 
+void dsp::synchronize()
+{
+    for (int i = 0; i < num_streams; i++)
+        handleError(cudaStreamSynchronize(streams[i]));
+}
+
 void dsp::copyData(gpuvec_c& source, gpuvec_c& dist, cudaStream_t& stream)
 {
     thrust::copy(thrust::cuda::par_nosync.on(stream), source.begin(), source.end(), dist.begin());
@@ -772,7 +778,7 @@ void dsp::calculateG2Alt(gpuvec_c& data_1, gpuvec_c& data_2, gpuvec_c& power1, g
 template <typename T>
 thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T>* traces, const T divisor)
 {
-    handleError(cudaDeviceSynchronize());
+    synchronize();
     thrust::device_vector<T> tmp(traces[0].size(), T(0));
     for (int i = 0; i < num_streams; i++)
         thrust::transform(traces[i].begin(), traces[i].end(), tmp.begin(), tmp.begin(), thrust::plus<T>());
@@ -784,7 +790,7 @@ thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T>* t
 hostvec_c dsp::getCumulativeCorrelator(gpuvec_c g_out[4])
 {
     gpuvec_c c(g_out[0].size(), tcf(0));
-    this->handleError(cudaDeviceSynchronize());
+    synchronize();
     for (int i = 0; i < num_streams; i++)
         thrust::transform(g_out[i].begin(), g_out[i].end(), c.begin(), c.begin(), thrust::plus<tcf>());
     hostvec_c result = c;
@@ -896,29 +902,34 @@ __global__ void s21Reduce(
 
 std::pair<stdvec_c, stdvec_c> dsp::getAverageField()
 {
-    stdvec_c h_tmp1(getTraceLength());
-    stdvec_c h_tmp2(getTraceLength());
-    sumTracesReduce<<<getTraceLength(), 256, 256 * sizeof(tcf)>>>(
+    synchronize();
+    const int length = getResampledTraceLength();
+    stdvec_c h_tmp1(length);
+    stdvec_c h_tmp2(length);
+    sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
         thrust::raw_pointer_cast(subtraction_data1[0].data()),
         thrust::raw_pointer_cast(subtraction_data1[1].data()),
         thrust::raw_pointer_cast(subtraction_data1[2].data()),
         thrust::raw_pointer_cast(subtraction_data1[3].data()),
-        thrust::raw_pointer_cast(tmp1.data()), getTraceLength(), batch_size);
-    sumTracesReduce<<<getTraceLength(), 256, 256 * sizeof(tcf)>>>(
+        thrust::raw_pointer_cast(tmp1.data()), length, batch_size);
+    handleError(cudaGetLastError());
+    sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
         thrust::raw_pointer_cast(subtraction_data2[0].data()),
         thrust::raw_pointer_cast(subtraction_data2[1].data()),
         thrust::raw_pointer_cast(subtraction_data2[2].data()),
         thrust::raw_pointer_cast(subtraction_data2[3].data()),
-        thrust::raw_pointer_cast(tmp2.data()), getTraceLength(), batch_size);
+        thrust::raw_pointer_cast(tmp2.data()), length, batch_size);
+    handleError(cudaGetLastError());
     // copy from tmp1 and tmp2 to host vectors
-    cudaMemcpy(h_tmp1.data(), thrust::raw_pointer_cast(tmp1.data()), getTraceLength() * sizeof(tcf), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(tmp2.data()), getTraceLength() * sizeof(tcf), cudaMemcpyDeviceToHost);
+    handleError(cudaMemcpy(h_tmp1.data(), thrust::raw_pointer_cast(tmp1.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    handleError(cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(tmp2.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return { h_tmp1, h_tmp2 };
 }
 
 
 std::pair<std::complex<float>, std::complex<float>> dsp::getS21()
 {
+    synchronize();
     const size_t n = subtraction_data1[0].size();
     if (n == 0)
         return { std::complex<float>(0.f, 0.f), std::complex<float>(0.f, 0.f) };
@@ -942,6 +953,7 @@ std::pair<std::complex<float>, std::complex<float>> dsp::getS21()
         s21_sum1,
         s21_sum2,
         n);
+    this->handleError(cudaGetLastError());
 
     float2 h1{ 0.f, 0.f };
     float2 h2{ 0.f, 0.f };
@@ -957,31 +969,37 @@ std::pair<std::complex<float>, std::complex<float>> dsp::getS21()
 
 hostvec_c dsp::getCrossPower()
 {
-    stdvec_c h_cross_power(getResampledTraceLength());
-    sumTracesReduce<<<getResampledTraceLength(), 256, 256 * sizeof(tcf)>>>(
+    synchronize();
+    const int length = getResampledTraceLength();
+    stdvec_c h_cross_power(length);
+    sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
         thrust::raw_pointer_cast(cross_power[0].data()),
         thrust::raw_pointer_cast(cross_power[1].data()),
         thrust::raw_pointer_cast(cross_power[2].data()),
         thrust::raw_pointer_cast(cross_power[3].data()),
         thrust::raw_pointer_cast(tmp_cross.data()),
-        getResampledTraceLength(),
+        length,
         batch_size);
-    cudaMemcpy(h_cross_power.data(), thrust::raw_pointer_cast(tmp_cross.data()), getResampledTraceLength() * sizeof(tcf), cudaMemcpyDeviceToHost);
+    handleError(cudaGetLastError());
+    handleError(cudaMemcpy(h_cross_power.data(), thrust::raw_pointer_cast(tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return h_cross_power;
 }
 
 hostvec_c dsp::getCrossSpectrum()
 {
-    stdvec_c h_cross_spectrum(getResampledTraceLength());
-    sumTracesReduce<<<getResampledTraceLength(), 256, 256 * sizeof(tcf)>>>(
+    synchronize();
+    const int length = getResampledTraceLength();
+    stdvec_c h_cross_spectrum(length);
+    sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
         thrust::raw_pointer_cast(cross_spectrum[0].data()),
         thrust::raw_pointer_cast(cross_spectrum[1].data()),
         thrust::raw_pointer_cast(cross_spectrum[2].data()),
         thrust::raw_pointer_cast(cross_spectrum[3].data()),
         thrust::raw_pointer_cast(tmp_cross.data()),
-        getResampledTraceLength(),
+        length,
         batch_size);
-    cudaMemcpy(h_cross_spectrum.data(), thrust::raw_pointer_cast(tmp_cross.data()), getResampledTraceLength() * sizeof(tcf), cudaMemcpyDeviceToHost);
+    handleError(cudaGetLastError());
+    handleError(cudaMemcpy(h_cross_spectrum.data(), thrust::raw_pointer_cast(tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return h_cross_spectrum;
 }
 
@@ -1038,7 +1056,7 @@ std::vector<hostvec_c> dsp::getCumulativeSubtrData()
     std::vector<hostvec_c> subtr_data;
     gpuvec_c f1(subtraction_data1[0].size(), tcf(0));
     gpuvec_c f2(subtraction_data2[0].size(), tcf(0));
-    this->handleError(cudaDeviceSynchronize());
+    synchronize();
     for (int i = 0; i < num_streams; i++)
     {
         thrust::transform(subtraction_data1[i].begin(), subtraction_data1[i].end(), f1.begin(), f1.begin(), thrust::plus<tcf>());
@@ -1084,6 +1102,7 @@ void dsp::setSubtractionTrace(hostvec_c trace[num_channels])
 
 void dsp::getSubtractionTrace(std::vector<stdvec_c>& trace)
 {
+    synchronize();
     hostvec_c h_subtr_trace1 = subtraction_trace1;
     hostvec_c h_subtr_trace2 = subtraction_trace2;
     trace.push_back(stdvec_c(h_subtr_trace1.begin(), h_subtr_trace1.end()));

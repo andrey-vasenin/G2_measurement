@@ -129,6 +129,8 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
             raise AssertionError("get_total_length returned an unexpected value")
         if measurer.get_trace_length() != segment:
             raise AssertionError("get_trace_length returned an unexpected value")
+        if measurer.get_resampled_trace_length() != out_len:
+            raise AssertionError("get_resampled_trace_length returned an unexpected value")
         if measurer.get_out_size() != out_len * out_len:
             raise AssertionError("get_out_size returned an unexpected value")
         if measurer.get_notify_size() != 4 * segment * batch:
@@ -197,8 +199,8 @@ def main() -> None:
         "--second-oversampling",
         type=int,
         nargs="+",
-        default=[1],
-        help="Second-oversampling factors to exercise. Current CTest default is 1.",
+        default=[1, 2, 4],
+        help="Second-oversampling factors to exercise.",
     )
     parser.add_argument("--tolerance", type=float, default=2e-3, help="Relative numerical tolerance")
     args = parser.parse_args()

@@ -61,6 +61,7 @@ PYBIND11_MODULE(AverageField, m)
         .def("set_averages_number", &Measurement::setAveragesNumber, output_and_gil_guard())
         .def("get_total_length", &Measurement::getTotalLength, output_and_gil_guard())
         .def("get_trace_length", &Measurement::getTraceLength, output_and_gil_guard())
+        .def("get_resampled_trace_length", &Measurement::getResampledTraceLength, output_and_gil_guard())
         .def("get_out_size", &Measurement::getOutSize, output_and_gil_guard())
         .def("get_notify_size", &Measurement::getNotifySize, output_and_gil_guard());
 }

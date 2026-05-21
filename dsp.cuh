@@ -185,6 +185,8 @@ public:
 
     void waitInputCopy(int stream_num);
 
+    void synchronize();
+
     std::vector<hostvec_c> getCumulativeSubtrData();
   
     hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
