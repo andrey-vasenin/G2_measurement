@@ -10,6 +10,8 @@
 #include <numeric>
 #include <complex>
 #include <cstdint>
+#include <algorithm>
+#include <cctype>
 #include "dsp.cuh"
 #include "dsp_functors.cuh"
 #include "digitizer.h"
@@ -20,9 +22,29 @@
 #include <thread>
 
 
+namespace
+{
+ResultMode parseResultMode(std::string mode)
+{
+    std::transform(mode.begin(), mode.end(), mode.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::replace(mode.begin(), mode.end(), '-', '_');
+
+    if (mode == "average" || mode == "average_only" || mode == "s21")
+        return ResultMode::AverageOnly;
+    if (mode == "average_g1" || mode == "regular" || mode == "pulse")
+        return ResultMode::AverageG1;
+    if (mode == "all" || mode == "all_correlators")
+        return ResultMode::AllCorrelators;
+
+    throw std::runtime_error("Unsupported result_mode '" + mode + "'. Supported modes: average, average_g1, all_correlators");
+}
+}
+
+
 
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
-                         int second_oversampling)
+                         int second_oversampling, const std::string &result_mode)
 {
     dig = dig_;
     sampling_rate = static_cast<double>(dig->getSamplingRate());
@@ -33,7 +55,7 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
     notify_size = 2 * num_channels * segment_size * batch_size;
     dig->handleError();
     dig->setTimeout(5000); // ms
-    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling);
+    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parseResultMode(result_mode));
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -61,15 +83,15 @@ void Measurement::setDigParameters()
 }
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
-                         int second_oversampling)
+                         int second_oversampling, const std::string &result_mode)
     : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch,
-                  second_oversampling)
+                  second_oversampling, result_mode)
 {
 }
 
 // Constructor for test measurement
 Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
-                int second_oversampling)
+                int second_oversampling, const std::string &result_mode)
 {
     dig = nullptr;
     batch_size = batch;
@@ -78,7 +100,7 @@ Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, int di
     sampling_rate = 1.25E+9/dig_oversampling;
     setAveragesNumber(averages);
     notify_size = 2 * num_channels * segment_size * batch_size;
-    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling);
+    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parseResultMode(result_mode));
     initializeBuffer();
 
     func = [this](int8_t *data) mutable

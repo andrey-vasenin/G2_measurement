@@ -33,6 +33,28 @@ typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
 
+enum class ResultMode
+{
+    AverageOnly,
+    AverageG1,
+    AllCorrelators
+};
+
+inline const char *resultModeName(ResultMode mode)
+{
+    switch (mode)
+    {
+    case ResultMode::AverageOnly:
+        return "average";
+    case ResultMode::AverageG1:
+        return "average_g1";
+    case ResultMode::AllCorrelators:
+        return "all_correlators";
+    default:
+        return "unknown";
+    }
+}
+
 template <typename T>
 inline T *get(thrust::device_vector<T> vec)
 {
@@ -120,6 +142,7 @@ private:
     size_t total_length; // batch_size * trace_length
     size_t resampled_total_length;
     size_t out_size;
+    ResultMode result_mode;
     int semaphore = 0;           // for selecting the current stream
     float scale = 500.f / 128.f; // for conversion into mV // max int8 is 127
 
@@ -148,9 +171,11 @@ private:
     float a_qi[num_channels], a_qq[num_channels], c_i[num_channels], c_q[num_channels];
 
 public:
-    dsp(size_t len, uint64_t n, double samplerate, int second_oversampling);
+    dsp(size_t len, uint64_t n, double samplerate, int second_oversampling, ResultMode mode);
 
     ~dsp();
+
+    const char *getResultModeName() const { return resultModeName(result_mode); }
 
     int getTraceLength();
 
@@ -240,6 +265,14 @@ public:
     void setAmplitude(int ampl);
 
 protected:
+    bool hasG1() const;
+
+    bool hasAllCorrelators() const;
+
+    void requireG1(const char *getter_name) const;
+
+    void requireAllCorrelators(const char *getter_name) const;
+
     template <typename T>
     thrust::host_vector<T> getCumulativeTrace(const thrust::device_vector<T> *traces, const T divisor);
 

@@ -45,13 +45,13 @@ private:
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
-                int second_oversampling);
+                int second_oversampling, const std::string &result_mode = "average_g1");
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
-                int second_oversampling);
+                int second_oversampling, const std::string &result_mode = "average_g1");
 
     Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
-                int second_oversampling);
+                int second_oversampling, const std::string &result_mode = "average_g1");
     
     void setDigParameters();
                 
@@ -135,6 +135,8 @@ public:
     int getOutSize() { return processor->getOutSize(); }
 
     size_t getNotifySize() { return notify_size; }
+
+    std::string getResultMode() const { return processor->getResultModeName(); }
 
 protected:
     void initializeBuffer();

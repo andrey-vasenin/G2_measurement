@@ -123,12 +123,12 @@ AverageField.AverageFieldMeasurer
 Exposed methods:
 
 - Constructors:
-  - `AverageFieldMeasurer(digitizer_handle, averages, batch, second_oversampling)`
-  - `AverageFieldMeasurer(averages, batch, segment, digitizer_oversampling, second_oversampling)`
+  - `AverageFieldMeasurer(digitizer_handle, averages, batch, second_oversampling, result_mode="average_g1")`
+  - `AverageFieldMeasurer(averages, batch, segment, digitizer_oversampling, second_oversampling, result_mode="average_g1")`
 - Configuration: `set_calibration`, `set_firwin`, `set_corr_downconvert_freqs`, `set_amplitude`, `set_intermediate_frequency`, `set_averages_number`, `set_subtraction_trace`
 - Execution: `measure`, `measure_test`, `reset`, `reset_output`, `free`
 - Results: `get_g1_correlator`, `get_g1_other_correlators`, `get_average_field`, `get_s21`, `get_cross_power`, `get_cross_spectrum`, `get_subtraction_trace`, `get_subtraction_data`
-- Shape helpers: `get_total_length`, `get_trace_length`, `get_resampled_trace_length`, `get_out_size`, `get_notify_size`
+- Shape/mode helpers: `get_total_length`, `get_trace_length`, `get_resampled_trace_length`, `get_result_mode`, `get_out_size`, `get_notify_size`
 
 Wrapper behavior in `/Users/vvvoskr/Projects/QO-measurements/lib2/quantumOptics/averageFieldWrapper.py`:
 
@@ -169,6 +169,14 @@ out_size                  = resampled_trace_length * resampled_trace_length
 notify_size               = 2 * num_channels * segment_size * batch_size bytes
 host DMA buffer size      = 4 * notify_size bytes
 ```
+
+Dev branch result modes:
+
+- `average` / `average_only` / `s21`: computes average-field, S21, subtraction data, and subtraction trace; skips G1, G1-other, cross-power, cross-spectrum buffers and work.
+- `average_g1` / `regular` / `pulse`: default regular pulse mode; adds the main G1 matrix and only the conjugate buffer needed for it.
+- `all_correlators` / `all`: heavy mode; adds G1-other matrices, cross-power, cross-spectrum, the second conjugate buffer, correlation FFT plans, and all corresponding processing.
+
+Getters for outputs not enabled by the selected mode throw a clear `result_mode` error instead of reading empty GPU buffers.
 
 Memory model inside `dsp`:
 
@@ -981,6 +989,8 @@ For `L=1800`, `B=1024`:
 | 4 | 450 | ~0.3 GB plus library workspaces |
 
 The exact value depends on allocator overhead and cuFFT/cuBLAS workspaces, but the scaling is the important point. Output selection and direct reduced accumulators can reduce this further.
+
+Dev branch update: output selection is now explicit through `result_mode`. The default `average_g1` mode avoids the three additional G1 matrices, cross-power/cross-spectrum accumulators, one resampled conjugate buffer, correlation FFT plans, and cross-correlation work that are only needed by `all_correlators`.
 
 ### 18.10 Profiling Plan for MeasurementPC
 

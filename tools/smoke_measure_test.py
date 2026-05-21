@@ -97,7 +97,25 @@ def _assert_matrix_shape(matrix, side: int, label: str) -> None:
             raise AssertionError(f"{label}[{row_idx}]: column count {len(row)} != expected {side}")
 
 
-def _run_case(module, segment: int, batch: int, averages: int, second_oversampling: int, tol: float) -> None:
+def _assert_unavailable(func, label: str) -> None:
+    try:
+        func()
+    except RuntimeError as exc:
+        if "result_mode" not in str(exc):
+            raise AssertionError(f"{label}: unexpected RuntimeError: {exc}") from exc
+        return
+    raise AssertionError(f"{label}: getter unexpectedly succeeded")
+
+
+def _run_case(
+    module,
+    segment: int,
+    batch: int,
+    averages: int,
+    second_oversampling: int,
+    result_mode: str,
+    tol: float,
+) -> None:
     if averages % batch != 0:
         raise ValueError("averages must be divisible by batch")
 
@@ -112,8 +130,11 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
         segment,
         1,
         second_oversampling,
+        result_mode,
     )
     try:
+        if measurer.get_result_mode() != result_mode:
+            raise AssertionError("get_result_mode returned an unexpected value")
         measurer.set_amplitude(128)
         measurer.set_calibration(0, 1.0, 0.0, 0.0, 0.0)
         measurer.set_calibration(1, 1.0, 0.0, 0.0, 0.0)
@@ -121,8 +142,6 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
         measurer.set_intermediate_frequency(0.0)
         measurer.set_test_input(_interleaved_int8_input(ch1, ch2))
         measurer.measure_test()
-
-        g1 = measurer.get_g1_correlator()
 
         if measurer.get_total_length() != segment * batch:
             raise AssertionError("get_total_length returned an unexpected value")
@@ -143,25 +162,37 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
         _assert_close(complex(s21_1), sum(expected_ch1, 0j) / out_len, "s21[0]", tol)
         _assert_close(complex(s21_2), sum(expected_ch2, 0j) / out_len, "s21[1]", tol)
 
-        cross_power = list(measurer.get_cross_power())
-        expected_cross_power = [a.conjugate() * b for a, b in zip(expected_ch1, expected_ch2)]
-        _assert_sequence_close(cross_power, expected_cross_power, "cross_power", tol)
+        if result_mode == "average":
+            _assert_unavailable(measurer.get_g1_correlator, "get_g1_correlator")
+            _assert_unavailable(measurer.get_g1_other_correlators, "get_g1_other_correlators")
+            _assert_unavailable(measurer.get_cross_power, "get_cross_power")
+            _assert_unavailable(measurer.get_cross_spectrum, "get_cross_spectrum")
+        else:
+            g1 = measurer.get_g1_correlator()
+            _assert_matrix_shape(g1, out_len, "g1")
+            for idx in range(out_len):
+                expected_diag = expected_ch1[idx] * expected_ch2[idx].conjugate()
+                _assert_close(complex(g1[idx][idx]), expected_diag, f"g1[{idx}][{idx}]", tol)
 
-        _assert_matrix_shape(g1, out_len, "g1")
-        for idx in range(out_len):
-            expected_diag = expected_ch1[idx] * expected_ch2[idx].conjugate()
-            _assert_close(complex(g1[idx][idx]), expected_diag, f"g1[{idx}][{idx}]", tol)
+            if result_mode == "average_g1":
+                _assert_unavailable(measurer.get_g1_other_correlators, "get_g1_other_correlators")
+                _assert_unavailable(measurer.get_cross_power, "get_cross_power")
+                _assert_unavailable(measurer.get_cross_spectrum, "get_cross_spectrum")
+            else:
+                cross_power = list(measurer.get_cross_power())
+                expected_cross_power = [a.conjugate() * b for a, b in zip(expected_ch1, expected_ch2)]
+                _assert_sequence_close(cross_power, expected_cross_power, "cross_power", tol)
 
-        other_g1 = measurer.get_g1_other_correlators()
-        if len(other_g1) != 3:
-            raise AssertionError(f"get_g1_other_correlators returned {len(other_g1)} matrices")
-        for idx, matrix in enumerate(other_g1):
-            _assert_matrix_shape(matrix, out_len, f"g1_other[{idx}]")
+                other_g1 = measurer.get_g1_other_correlators()
+                if len(other_g1) != 3:
+                    raise AssertionError(f"get_g1_other_correlators returned {len(other_g1)} matrices")
+                for idx, matrix in enumerate(other_g1):
+                    _assert_matrix_shape(matrix, out_len, f"g1_other[{idx}]")
 
-        cross_spectrum = list(measurer.get_cross_spectrum())
-        if len(cross_spectrum) != out_len:
-            raise AssertionError("get_cross_spectrum returned an unexpected length")
-        _assert_finite(cross_spectrum, "cross_spectrum")
+                cross_spectrum = list(measurer.get_cross_spectrum())
+                if len(cross_spectrum) != out_len:
+                    raise AssertionError("get_cross_spectrum returned an unexpected length")
+                _assert_finite(cross_spectrum, "cross_spectrum")
 
         subtraction_data = measurer.get_subtraction_data()
         if len(subtraction_data) != 2:
@@ -183,7 +214,7 @@ def _run_case(module, segment: int, batch: int, averages: int, second_oversampli
 
     print(
         f"measure_test passed: segment={segment}, batch={batch}, "
-        f"averages={averages}, second_oversampling={second_oversampling}"
+        f"averages={averages}, second_oversampling={second_oversampling}, result_mode={result_mode}"
     )
 
 
@@ -201,6 +232,13 @@ def main() -> None:
         default=[1, 2, 4],
         help="Second-oversampling factors to exercise.",
     )
+    parser.add_argument(
+        "--result-mode",
+        nargs="+",
+        default=["average", "average_g1", "all_correlators"],
+        choices=["average", "average_g1", "all_correlators"],
+        help="Result modes to exercise.",
+    )
     parser.add_argument("--tolerance", type=float, default=2e-3, help="Relative numerical tolerance")
     args = parser.parse_args()
 
@@ -211,7 +249,8 @@ def main() -> None:
     print(f"Loaded: {module_path}")
 
     for second_oversampling in args.second_oversampling:
-        _run_case(module, args.segment, args.batch, args.averages, second_oversampling, args.tolerance)
+        for result_mode in args.result_mode:
+            _run_case(module, args.segment, args.batch, args.averages, second_oversampling, result_mode, args.tolerance)
 
 
 if __name__ == "__main__":
