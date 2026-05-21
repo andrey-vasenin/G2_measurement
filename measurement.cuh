@@ -15,8 +15,9 @@
 
 // namespace py = pybind11;
 
-using corr_t = std::vector<std::vector<std::complex<double>>>;
-using trace_t = std::vector<std::complex<double>>;
+using output_complex_t = std::complex<float>;
+using trace_t = std::vector<output_complex_t>;
+using corr_t = std::vector<trace_t>;
 
 
 class Measurement
@@ -129,12 +130,18 @@ public:
 
     int getTraceLength() { return processor->getTraceLength(); }
 
+    int getResampledTraceLength() { return processor->getResampledTraceLength(); }
+
     int getOutSize() { return processor->getOutSize(); }
 
     size_t getNotifySize() { return notify_size; }
 
 protected:
     void initializeBuffer();
+
+    float getIterationsDivisor() const;
+
+    corr_t makeCorrelationMatrix(const hostvec_c &data, int side) const;
 
     template <typename T, typename V>
     std::vector<V> postprocess(const thrust::host_vector<T> &data);

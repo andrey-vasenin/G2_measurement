@@ -240,49 +240,27 @@ void Measurement::setTestInput(const std::vector<int8_t> &input)
 corr_t Measurement::getG1Correlator()
 {
     int side = processor->getResampledTraceLength();
-
-    corr_t avg_glr(side, trace_t(side));
-
-    // Receive data from GPU
     auto corrs = processor->getG1Result();
-    
-    // Divide the data by a number of traces measured
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-        for (int t2 = 0; t2 < side; t2++)
-            avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-    return avg_glr;
+    return makeCorrelationMatrix(corrs, side);
 }
 
 std::tuple<corr_t, corr_t, corr_t> Measurement::getG1OtherCorrelators()
 {
     int side = processor->getResampledTraceLength();
-    corr_t reordered(side, trace_t(side));
-    corr_t creation(side, trace_t(side));
-    corr_t annihilation(side, trace_t(side));
-
     auto [reordered_corrs, creation_corrs, annihilation_corrs] = processor->getG1OtherResults();
 
-    tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-    for (int t1 = 0; t1 < side; t1++)
-    {
-        for (int t2 = 0; t2 < side; t2++)
-        {
-            reordered[t1][t2] = std::complex<float>(reordered_corrs[t1 * side + t2] / X);
-            creation[t1][t2] = std::complex<float>(creation_corrs[t1 * side + t2] / X);
-            annihilation[t1][t2] = std::complex<float>(annihilation_corrs[t1 * side + t2] / X);
-        }
-    }
-
-    return { reordered, creation, annihilation };
+    return {
+        makeCorrelationMatrix(reordered_corrs, side),
+        makeCorrelationMatrix(creation_corrs, side),
+        makeCorrelationMatrix(annihilation_corrs, side)
+    };
 }
 
 std::pair<stdvec_c, stdvec_c> Measurement::getAverageField()
 {
     int length = processor->getResampledTraceLength();
     auto [afs1, afs2] = processor->getAverageField();
-    std::complex<float> X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    output_complex_t X(getIterationsDivisor(), 0.f);
 
     for (int i = 0; i < length; i++)
     {
@@ -295,7 +273,7 @@ std::pair<stdvec_c, stdvec_c> Measurement::getAverageField()
 std::pair<std::complex<float>, std::complex<float>> Measurement::getS21()
 {
     auto [s21_1, s21_2] = processor->getS21();
-    std::complex<float> X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
+    output_complex_t X(getIterationsDivisor(), 0.f);
     s21_1 /= X;
     s21_2 /= X;
     return {s21_1, s21_2};
@@ -500,10 +478,30 @@ template <typename T, typename V>
 std::vector<V> Measurement::postprocess(const thrust::host_vector<T> &data)
 {
     std::vector<V> result(data.size());
-    float divider = (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
+    float divider = getIterationsDivisor();
     thrust::transform(data.cbegin(), data.cend(), result.begin(),
                       [divider](const T &x)
                       { return static_cast<V>(x / divider); });
+    return result;
+}
+
+float Measurement::getIterationsDivisor() const
+{
+    return (iters_done > 0) ? static_cast<float>(iters_done) : 1.f;
+}
+
+corr_t Measurement::makeCorrelationMatrix(const hostvec_c &data, int side) const
+{
+    corr_t result(side, trace_t(side));
+    tcf divisor(getIterationsDivisor(), 0.f);
+    for (int t1 = 0; t1 < side; t1++)
+    {
+        for (int t2 = 0; t2 < side; t2++)
+        {
+            tcf value = data[t1 * side + t2] / divisor;
+            result[t1][t2] = output_complex_t(value.real(), value.imag());
+        }
+    }
     return result;
 }
 
