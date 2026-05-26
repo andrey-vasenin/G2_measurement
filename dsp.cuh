@@ -88,33 +88,15 @@ class dsp
     gpuvec_c data2_resampled_conj[num_streams];
     gpuvec_c subtraction_data1[num_streams];
     gpuvec_c subtraction_data2[num_streams];
-    gpuvec_c data_for_correlation1[num_streams];
-    gpuvec_c data_for_correlation2[num_streams];
-    gpuvec_c data_without_central_peak1[num_streams];
-    gpuvec_c data_without_central_peak2[num_streams];
-
-    gpuvec_c interference_out[num_streams];
     gpuvec_c g1[num_streams];
     gpuvec_c g1_annihilation[num_streams];
     gpuvec_c g1_creation[num_streams];
     gpuvec_c g1_reordered[num_streams];
-    gpuvec_c g1_filt[num_streams];
-    gpuvec_c g2_out[num_streams];
-    gpuvec_c g2_out_cross_segment[num_streams];
-    gpuvec_c g2_out_filtered[num_streams];
-    gpuvec_c g2_out_filtered_cross_segment[num_streams];
     gpuvec_c cross_power[num_streams];
     gpuvec_c cross_spectrum[num_streams];
-    gpuvec_c cross_power_short[num_streams];
-    gpuvec_c power1[num_streams];
-    gpuvec_c power2[num_streams];
-    gpuvec_c power_short[num_streams];
 
     /* Filtering windows */
     gpuvec_c firwin;
-    gpuvec_c center_peak_win;
-    gpuvec_c corr_firwin1;
-    gpuvec_c corr_firwin2;
 
     /* Subtraction traces */
     gpuvec_c subtraction_trace1;
@@ -136,8 +118,7 @@ private:
     size_t trace_length; // for keeping the length of a trace
     int oversampling;    // determines oversampling after digital filtering
     size_t resampled_trace_length;
-    size_t trace1_start, trace2_start, pitch;
-    size_t inter_buffer_size;
+    size_t pitch;
     size_t batch_size;   // for keeping the number of segments in data array  // was uint64_t
     size_t total_length; // batch_size * trace_length
     size_t resampled_total_length;
@@ -148,10 +129,8 @@ private:
 
     const cuComplex alpha = make_cuComplex(1, 0);
     const cuComplex beta = make_cuComplex(1, 0);
-    const float beta_float = 1.0;
     cublasOperation_t op_n = CUBLAS_OP_N;
     cublasOperation_t op_t = CUBLAS_OP_T;
-    cublasOperation_t op_c = CUBLAS_OP_C;
 
     /* Streams' arrays */
     cudaStream_t streams[num_streams];
@@ -196,12 +175,6 @@ public:
     void setFirwin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
     void setFirwin(hostvec_c window);
 
-    void setCentralPeakWin(float cutoff_l, float cutoff_r, int dig_oversampling = 1);
-    void setCentralPeakWin(hostvec_c window);
-
-    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2, int dig_oversampling = 1);
-    void setCorrelationFirwin(hostvec_c window1, hostvec_c window2);
-
     void makeFilterWindow(float cutoff_l, float cutoff_r, gpuvec_c &window, size_t trace_len, size_t total_len, int oversampling = 1);
 
     void resetOutput();
@@ -214,8 +187,6 @@ public:
 
     std::vector<hostvec_c> getCumulativeSubtrData();
   
-    hostvec_c getCumulativeCorrelator(gpuvec_c g_out[4]);
-
     hostvec_c getG1Result();
 
     std::tuple<hostvec_c, hostvec_c, hostvec_c> getG1OtherResults();
@@ -228,22 +199,6 @@ public:
 
     hostvec_c getCrossSpectrum();
     
-    // hostvec_c getG1CrossResult();
-
-    // hostvec_c getG1FiltResult();
-
-    // hostvec_c getG1FiltConjResult();
-
-    // hostvec_c getG2FullResult();
-
-    // hostvec_c getG2CrossSegmentResult();
-
-    // hostvec_c getG2FilteredResult();
-
-    // hostvec_c getG2FilteredCrossSegmentResult();
-
-    // hostvec_c getInterferenceRsult();
-
     void setDownConversionCalibrationParameters(int channel_num, float r, float phi, float offset_i, float offset_q);
 
     void setSubtractionTrace(hostvec_c trace[num_channels]);
@@ -287,8 +242,6 @@ protected:
 
     void downconvert(gpuvec_c &data, int stream_num);
 
-    void calculateInterference(gpuvec_c &data1, gpuvec_c &data2, gpuvec_c &output, int stream_num);
-
     void applyDownConversionCalibration(gpuvec_c &data, cudaStream_t &stream, int channel_num);
 
     void addDataToOutput(const gpuvec_c &data, gpuvec_c &output, int stream_num);
@@ -299,27 +252,11 @@ protected:
 
     void calculateFFT(gpuvec_c &data, int stream_num, int direction, cufftHandle &plan);
 
-    void applyFilterAlt(gpuvec_c &fftdata, const gpuvec_c &window, int stream_num, size_t length, cufftHandle &plan);
-
-    void copyData(gpuvec_c &source, gpuvec_c &dist, cudaStream_t &stream);
-
     void resample(const gpuvec_c &traces, gpuvec_c &resampled_traces, const cudaStream_t &stream);
-
-    void normalize(gpuvec_c &data, float coeff, int stream_num);
-
-    void calculateG1(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &output, cublasHandle_t &handle);
 
     void calculateG1gemm(gpuvec_c& data1, gpuvec_c& data2, gpuvec_c& output, cublasHandle_t &handle, cublasOperation_t &op_1, cublasOperation_t &op_2);
 
-    void calculateG2(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
-
     void calculateG2gemm(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &output, const cudaStream_t &stream, cublasHandle_t &handle);
-
-    void calculateG2New(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &cross_power, gpuvec_c &cross_power_short, gpuvec_c &output_one_segment, 
-                        gpuvec_c &output_cross_segment,const cudaStream_t &stream, cublasHandle_t &handle);
-
-    void calculateG2Alt(gpuvec_c &data_1, gpuvec_c &data_2, gpuvec_c &power1, gpuvec_c &power2, gpuvec_c &power_short, 
-                        gpuvec_c &output_one_segment, gpuvec_c &output_cross_segment, const cudaStream_t &stream, cublasHandle_t &handle);
 };
 
 #endif // CPPMEASUREMENT_DSP_CUH

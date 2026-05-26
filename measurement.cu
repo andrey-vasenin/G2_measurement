@@ -12,6 +12,9 @@
 #include <cstdint>
 #include <algorithm>
 #include <cctype>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include "dsp.cuh"
 #include "dsp_functors.cuh"
 #include "digitizer.h"
@@ -39,6 +42,82 @@ ResultMode parseResultMode(std::string mode)
 
     throw std::runtime_error("Unsupported result_mode '" + mode + "'. Supported modes: average, average_g1, all_correlators");
 }
+
+void validateSecondOversampling(int second_oversampling)
+{
+    if (second_oversampling != 1 && second_oversampling != 2 && second_oversampling != 4)
+        throw std::runtime_error("second_oversampling must be 1, 2, or 4");
+}
+
+void validateAverages(uint64_t averages, uint64_t batch)
+{
+    if (averages == 0)
+        throw std::runtime_error("averages must be > 0");
+    if (batch == 0)
+        throw std::runtime_error("batch must be > 0");
+    if (averages % batch != 0)
+        throw std::runtime_error("averages must be divisible by batch");
+}
+
+size_t validateSegment(long segment)
+{
+    if (segment <= 0)
+        throw std::runtime_error("segment must be > 0");
+    return static_cast<size_t>(segment);
+}
+
+size_t validateSegmentSize(size_t segment)
+{
+    if (segment == 0)
+        throw std::runtime_error("segment must be > 0");
+    return segment;
+}
+
+void validateSegmentOversampling(size_t segment, int second_oversampling)
+{
+    validateSecondOversampling(second_oversampling);
+    if (segment % static_cast<size_t>(second_oversampling) != 0)
+        throw std::runtime_error("segment must be divisible by second_oversampling");
+}
+
+void validateDigitizerOversampling(int dig_oversampling)
+{
+    if (dig_oversampling <= 0)
+        throw std::runtime_error("digitizer_oversampling must be > 0");
+}
+
+void validateSamplingRate(double sampling_rate)
+{
+    if (sampling_rate <= 0.0)
+        throw std::runtime_error("sampling_rate must be > 0");
+}
+
+void validateSizeEquals(size_t actual, size_t expected, const char *name)
+{
+    if (actual != expected)
+        throw std::runtime_error(std::string(name) + " must contain exactly " + std::to_string(expected) + " elements");
+}
+
+size_t checkedNotifySize(size_t segment, uint64_t batch)
+{
+    const size_t bytes_per_complex_pair = 2 * num_channels;
+    if (batch > std::numeric_limits<size_t>::max())
+        throw std::runtime_error("batch is too large");
+    size_t batch_size = static_cast<size_t>(batch);
+    if (segment != 0 && batch_size > std::numeric_limits<size_t>::max() / segment)
+        throw std::runtime_error("segment * batch is too large");
+    size_t samples = segment * batch_size;
+    if (samples > std::numeric_limits<size_t>::max() / bytes_per_complex_pair)
+        throw std::runtime_error("notify_size is too large");
+    return bytes_per_complex_pair * samples;
+}
+
+Digitizer *makeDigitizerFromHandle(std::uintptr_t dig_handle)
+{
+    if (dig_handle == 0)
+        throw std::runtime_error("digitizer_handle must be nonzero");
+    return new Digitizer(reinterpret_cast<void *>(dig_handle));
+}
 }
 
 
@@ -46,16 +125,31 @@ ResultMode parseResultMode(std::string mode)
 Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
                          int second_oversampling, const std::string &result_mode)
 {
-    dig = dig_;
-    sampling_rate = static_cast<double>(dig->getSamplingRate());
-    segment_size = dig->getSegmentSize();
+    std::unique_ptr<Digitizer> dig_guard(dig_);
+    if (dig_guard == nullptr)
+        throw std::runtime_error("digitizer must not be null");
+
+    ResultMode parsed_mode = parseResultMode(result_mode);
+    segment_size = dig_guard->getSegmentSize();
+    dig_guard->handleError();
+    sampling_rate = static_cast<double>(dig_guard->getSamplingRate());
+    dig_guard->handleError();
+    segment_size = validateSegmentSize(segment_size);
+    validateSamplingRate(sampling_rate);
+    validateSegmentOversampling(segment_size, second_oversampling);
+    validateAverages(averages, batch);
+
+    dig = dig_guard.get();
+    processor = nullptr;
     batch_size = batch;
     second_ovs = second_oversampling;
+    notify_size = checkedNotifySize(segment_size, batch_size);
     setAveragesNumber(averages);
-    notify_size = 2 * num_channels * segment_size * batch_size;
-    dig->handleError();
     dig->setTimeout(5000); // ms
-    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parseResultMode(result_mode));
+    dig->handleError();
+
+    std::unique_ptr<dsp> processor_guard(new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parsed_mode));
+    processor = processor_guard.get();
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -64,9 +158,9 @@ Measurement::Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
         processor->waitInputCopy(stream_num);
     };
 
-    int trace_length = processor->getTraceLength();
-
     test_input.resize(notify_size * 2, 0);
+    processor_guard.release();
+    dig_guard.release();
 }
 
 void Measurement::setDigParameters()
@@ -84,7 +178,7 @@ void Measurement::setDigParameters()
 
 Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
                          int second_oversampling, const std::string &result_mode)
-    : Measurement(new Digitizer(reinterpret_cast<void *>(dig_handle)), averages, batch,
+    : Measurement(makeDigitizerFromHandle(dig_handle), averages, batch,
                   second_oversampling, result_mode)
 {
 }
@@ -93,14 +187,23 @@ Measurement::Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t 
 Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
                 int second_oversampling, const std::string &result_mode)
 {
+    ResultMode parsed_mode = parseResultMode(result_mode);
+    validateDigitizerOversampling(dig_oversampling);
+    segment_size = validateSegment(segment);
+    validateSegmentOversampling(segment_size, second_oversampling);
+    validateAverages(averages, batch);
+
     dig = nullptr;
+    processor = nullptr;
     batch_size = batch;
     second_ovs = second_oversampling;
-    segment_size = segment;
     sampling_rate = 1.25E+9/dig_oversampling;
+    validateSamplingRate(sampling_rate);
+    notify_size = checkedNotifySize(segment_size, batch_size);
     setAveragesNumber(averages);
-    notify_size = 2 * num_channels * segment_size * batch_size;
-    processor = new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parseResultMode(result_mode));
+
+    std::unique_ptr<dsp> processor_guard(new dsp(segment_size, batch_size, sampling_rate, second_oversampling, parsed_mode));
+    processor = processor_guard.get();
     initializeBuffer();
 
     func = [this](int8_t *data) mutable
@@ -108,9 +211,8 @@ Measurement::Measurement(uint64_t averages, uint64_t batch, long segment, int di
         int stream_num = processor->compute(data);
         processor->waitInputCopy(stream_num);
     };
-    int trace_length = processor->getTraceLength();
-
     test_input.resize(notify_size, 0);
+    processor_guard.release();
 }
 
 Measurement::~Measurement()
@@ -170,6 +272,7 @@ void Measurement::setCorrDowncovertCoeffs(float freq1, float freq2)
 
 void Measurement::setAveragesNumber(uint64_t averages)
 {
+    validateAverages(averages, batch_size);
     segments_count = averages;
     iters_num = averages / batch_size;
     iters_done = 0;
@@ -177,6 +280,8 @@ void Measurement::setAveragesNumber(uint64_t averages)
 
 void Measurement::setCalibration(int line_num, float r, float phi, float offset_i, float offset_q)
 {
+    if (line_num < 0 || line_num >= num_channels)
+        throw std::runtime_error("line_num must be 0 or 1");
     processor->setDownConversionCalibrationParameters(line_num, r, phi, offset_i, offset_q);
 }
 
@@ -194,49 +299,15 @@ void Measurement::setFirwin(float left_cutoff, float right_cutoff)
 
 void Measurement::setFirwin(const stdvec_c window)
 {
+    validateSizeEquals(window.size(), segment_size, "firwin");
     auto tile_window = tile(window, batch_size);
     processor->setFirwin(tile_window);
 }
 
-void Measurement::setCentralPeakWin(float left_cutoff, float right_cutoff)
-{   
-    long sr = 0;
-    if (dig != nullptr)
-        sr = dig->getSamplingRate();
-    else 
-        sr = sampling_rate;
-    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
-    processor->setCentralPeakWin(left_cutoff, right_cutoff, oversampling);
-    cudaDeviceSynchronize();
-}
-
-void Measurement::setCentralPeakWin(const stdvec_c window)
-{
-    auto tile_window = tile(window, batch_size);
-    processor->setCentralPeakWin(tile_window);
-}
-
-void Measurement::setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2)
-{
-    long sr = 0;
-    if (dig != nullptr)
-        sr = dig->getSamplingRate();
-    else 
-        sr = sampling_rate;
-    int oversampling = static_cast<int>(std::round(1.25E+9f / sr));
-    processor->setCorrelationFirwin(cutoff_1, cutoff_2, oversampling);
-    cudaDeviceSynchronize();
-}
-
-void Measurement::setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2)
-{
-    auto tile_window1 = tile(window1, batch_size);
-    auto tile_window2 = tile(window2, batch_size);
-    processor->setCorrelationFirwin(tile_window1, tile_window2);
-}
-
 void Measurement::measure()
 {
+    if (dig == nullptr)
+        throw std::runtime_error("measure requires a digitizer handle");
     dig->prepareFifo(static_cast<unsigned long>(notify_size));
     dig->launchFifo(static_cast<unsigned long>(notify_size), iters_num, func, true);
     dig->stopFifo();
@@ -253,9 +324,7 @@ void Measurement::measureTest()
 
 void Measurement::setTestInput(const std::vector<int8_t> &input)
 {
-    if (input.size() < 2 * segment_size)
-        throw std::runtime_error("Number of element in the input array "
-                                 "must be larger or equal to the two segment sizes");
+    validateSizeEquals(input.size(), 2 * num_channels * segment_size, "test_input");
     test_input = tile(input, batch_size);
 }
 
@@ -313,163 +382,14 @@ stdvec_c Measurement::getCrossSpectrum()
     return postprocess<tcf, std::complex<float>>(cross_spectrum);
 }
 
-// corr_t Measurement::getG1Correlator()
-// {
-//     int side = processor->getResampledTraceLength();
-
-//     corr_t avg_glr(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto corrs = processor->getG1CrossResult();
-    
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-//     return avg_glr;
-// }
-
-// corr_t Measurement::getG1FiltCorrelator()
-// {
-//     int side = processor->getResampledTraceLength();
-
-//     corr_t avg_glr(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto corrs = processor->getG1FiltResult();
-    
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-//     return avg_glr;
-// }
-
-// corr_t Measurement::getG1FiltConjCorrelator()
-// {
-//     int side = processor->getResampledTraceLength();
-
-//     corr_t avg_glr(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto corrs = processor->getG1FiltConjResult();
-    
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//             avg_glr[t1][t2] = std::complex<float>(corrs[t1 * side + t2] / X);
-
-//     return avg_glr;
-// }
-
-// corr_t Measurement::getG2Correlator()
-// {
-//     int side = processor->getResampledTraceLength();
-//     corr_t avg_g2(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto result = processor->getG2FullResult();
-
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//         {
-//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-//         }
-//     return avg_g2;
-// }
-
-// corr_t Measurement::getG2CrossSegmentCorrelator()
-// {
-//     int side = processor->getResampledTraceLength();
-//     corr_t avg_g2(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto result = processor->getG2CrossSegmentResult();
-
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//         {
-//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-//         }
-//     return avg_g2;
-// }
-
-// corr_t Measurement::getG2FilteredCorrelator()
-// {
-//     int side = processor->getResampledTraceLength();
-//     corr_t avg_g2(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto result = processor->getG2FilteredResult();
-
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//         {
-//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-//         }
-//     return avg_g2;
-// }
-
-// corr_t Measurement::getG2FilteredCrossSegmentCorrelator()
-// {
-//     int side = processor->getResampledTraceLength();
-//     corr_t avg_g2(side, trace_t(side));
-
-//     // Receive data from GPU
-//     auto result = processor->getG2FilteredCrossSegmentResult();
-
-//     // Divide the data by a number of traces measured
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-
-//     for (int t1 = 0; t1 < side; t1++)
-//         for (int t2 = 0; t2 < side; t2++)
-//         {
-//             avg_g2[t1][t2] = std::complex<float>(result[t1 * side + t2] / X);
-//         }
-//     return avg_g2;
-// }
-
-// stdvec_c Measurement::getInterferenceResult()
-// {
-//     int side = processor->getResampledTraceLength();
-//     stdvec_c avg_res(side);
-
-//     auto result = processor->getInterferenceRsult();
-//     tcf X((iters_done > 0) ? static_cast<float>(iters_done) : 1.f, 0.f);
-//     for (int t1 = 0; t1 < side; t1++)
-//         {
-//             avg_res[t1] = std::complex<float>(result[t1] / X);
-//         }
-//     return avg_res;
-// }
-
-// stdvec_c Measurement::getRawG2()
-// {
-//     // Receive data from GPU
-//     auto result = processor->getG2FullResult();
-
-//     return stdvec_c(result.begin(), result.end());
-// }
-
 void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
 {
+    validateSizeEquals(trace.size(), num_channels, "subtraction_trace");
+    const size_t expected_trace_size = static_cast<size_t>(processor->getResampledTotalLength());
     hostvec_c average[num_channels];
     for (int i = 0; i < num_channels; i++)
     {
+        validateSizeEquals(trace[i].size(), expected_trace_size, "subtraction_trace channel");
         average[i] = trace[i];
     }
     processor->setSubtractionTrace(average);

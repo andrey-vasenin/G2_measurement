@@ -107,6 +107,54 @@ def _assert_unavailable(func, label: str) -> None:
     raise AssertionError(f"{label}: getter unexpectedly succeeded")
 
 
+def _assert_constructor_invalid(module, args: tuple, label: str, expected: str) -> None:
+    try:
+        module.AverageFieldMeasurer(*args)
+    except RuntimeError as exc:
+        if expected not in str(exc):
+            raise AssertionError(f"{label}: unexpected RuntimeError: {exc}") from exc
+        return
+    raise AssertionError(f"{label}: constructor unexpectedly succeeded")
+
+
+def _assert_runtime_error(func, label: str, expected: str) -> None:
+    try:
+        func()
+    except RuntimeError as exc:
+        if expected not in str(exc):
+            raise AssertionError(f"{label}: unexpected RuntimeError: {exc}") from exc
+        return
+    raise AssertionError(f"{label}: call unexpectedly succeeded")
+
+
+def _run_invalid_constructor_cases(module) -> None:
+    cases = [
+        ((2, 0, 16, 1, 1, "average"), "zero batch", "batch"),
+        ((2, 2, 0, 1, 1, "average"), "zero segment", "segment"),
+        ((2, 2, 16, 0, 1, "average"), "zero digitizer oversampling", "digitizer_oversampling"),
+        ((2, 2, 16, 1, 3, "average"), "unsupported second oversampling", "second_oversampling"),
+        ((2, 2, 18, 1, 4, "average"), "non-divisible segment", "divisible"),
+        ((3, 2, 16, 1, 1, "average"), "non-divisible averages", "averages"),
+        ((2, 2, 16, 1, 1, "bad_mode"), "unsupported result mode", "Unsupported result_mode"),
+    ]
+    for args, label, expected in cases:
+        _assert_constructor_invalid(module, args, label, expected)
+    print("invalid constructor checks passed")
+
+
+def _run_invalid_setter_cases(module) -> None:
+    measurer = module.AverageFieldMeasurer(2, 2, 16, 1, 1, "average")
+    try:
+        _assert_runtime_error(lambda: measurer.set_calibration(2, 1.0, 0.0, 0.0, 0.0), "bad calibration channel", "line_num")
+        _assert_runtime_error(lambda: measurer.set_firwin([1.0 + 0.0j] * 15), "bad FIR length", "firwin")
+        _assert_runtime_error(lambda: measurer.set_test_input([0] * 63), "bad test input length", "test_input")
+        _assert_runtime_error(lambda: measurer.set_subtraction_trace([[0.0 + 0.0j] * 16]), "bad subtraction trace count", "subtraction_trace")
+        _assert_runtime_error(measurer.measure, "measure without digitizer", "digitizer")
+    finally:
+        measurer.free()
+    print("invalid setter checks passed")
+
+
 def _run_case(
     module,
     segment: int,
@@ -247,6 +295,9 @@ def main() -> None:
     module_path = module_path.resolve()
     module = _load_module(module_path)
     print(f"Loaded: {module_path}")
+
+    _run_invalid_constructor_cases(module)
+    _run_invalid_setter_cases(module)
 
     for second_oversampling in args.second_oversampling:
         for result_mode in args.result_mode:

@@ -23,7 +23,7 @@ This branch builds a Windows-only `AverageField` Python extension with pybind11,
 5. GPU code accumulates average fields, G1 correlators, cross power, cross spectrum, and S21-related sums.
 6. Python calls getters that copy accumulated GPU results back to NumPy-compatible Python objects.
 
-The current active branch is focused on average field, S21, G1, cross-power, and cross-spectrum. Older G2/interference/filtering paths still exist in code but are mostly commented out or not exposed through pybind11.
+The current active branch is focused on average field, S21, G1, cross-power, and cross-spectrum. Older exposed/commented G2/interference/filtering paths have been cleaned out of the native surface; only a GEMM-based G2 helper remains unexposed for future explicit G2 workflow work.
 
 The biggest modernization blockers are not algorithmic first. They are build reproducibility, explicit synchronization around async DMA/GPU work, result getter correctness, and a stable Python API contract.
 
@@ -43,7 +43,7 @@ Tracked source files:
 | `npp_status_check.h` | NPP status-to-string helper used only when `_DEBUG1` checks are enabled. |
 | `pinned_allocator.cuh` | Generic CUDA pinned allocator, currently not materially used by the active pipeline. |
 | `noise.h` | Gaussian noise helper, not used by the active pybind module path. |
-| `main.cpp` | Stale/manual executable experiment harness. Not included in active `pybind11_add_module`; calls some APIs that are currently commented out. |
+| `main.cpp` | Minimal stub. The active build/test path is the pybind11 module plus CMake smoke targets, not this executable. |
 | `README.md` | One-line project description. |
 
 Important ignored/untracked build inputs:
@@ -143,8 +143,8 @@ API drift to note:
 - Older wrapper code that passes `part=1` needs to be updated; the dev-branch native API now treats the full digitizer segment as the trace and no longer exposes a `part` constructor parameter.
 - `AverageFieldWrapper.from_test_inputs(...)` must call the 5-argument no-hardware constructor: `(averages, batch, segment, digitizer_oversampling, second_oversampling)`.
 - `AverageFieldWrapper.from_digitizer(...)` assumes a `Digitizer*`/object-pointer overload, but pybind does not expose `Measurement(Digitizer*)`.
-- `set_corr_downconvert_freqs` is exposed, but the active `dsp::compute` path does not call `calculateInterference`, so those coefficients are currently unused for the exposed average-field/G1/cross-power/cross-spectrum outputs.
-- G2-related getters exist in commented code and `main.cpp`, but are not active pybind API in this branch.
+- `set_corr_downconvert_freqs` is exposed for compatibility, but the active `dsp::compute` path does not use those coefficients for average-field/G1/cross-power/cross-spectrum outputs. The coefficients are allocated lazily only if this setter is called.
+- G2-related getters are not active pybind API in this branch. The remaining native G2 code is the unexposed GEMM helper reserved for a future explicit G2 mode.
 
 ## 5. Derived Sizes and Data Layout
 
@@ -409,7 +409,7 @@ Modernization target:
 - Add `cudaPeekAtLastError`/`cudaGetLastError` after custom kernels, plus event or stream synchronization at defined boundaries.
 - Include enough context in exceptions: stream number, operation, dimensions, and current derived sizes.
 
-### 8.6 Averages Handling Silently Drops Remainders
+### 8.6 Averages Handling and Batch Divisibility
 
 `Measurement::setAveragesNumber` computes:
 
@@ -417,16 +417,14 @@ Modernization target:
 iters_num = averages / batch_size
 ```
 
-No remainder is handled or reported. If `averages` is not divisible by `batch_size`, the final partial batch is skipped. If `averages < batch_size`, no processing occurs.
+Dev branch update: constructors and `set_averages_number()` now require `averages > 0`, `batch > 0`, and `averages % batch == 0`. The previous silent final-partial-batch drop is now a clear exception.
 
 Impact:
 
-- User-requested averages can differ from actual processed averages.
 - `iters_done` is named as if it counts traces, but it counts processed batches.
 
 Modernization target:
 
-- Either require divisibility and throw a clear error, or support a final partial batch.
 - Rename internal counters (`batches_done`, `requested_segments`) to match semantics.
 - Expose actual processed averages to Python.
 
@@ -436,9 +434,9 @@ Examples:
 
 - Binding constructor comment does not match the actual exposed handle constructor behavior.
 - `from_test_inputs` in the wrapper does not match active pybind constructors.
-- `set_corr_downconvert_freqs` is exposed but unused in the active compute path.
-- Stale G2 methods remain in `main.cpp` and commented regions, but not in binding.
-- `main.cpp` is not part of the current module build and appears out of sync.
+- `set_corr_downconvert_freqs` is still exposed for compatibility but unused in the active compute path.
+- Stale G2 methods were removed from native comments/manual harness in the dev cleanup pass; future G2 should be reintroduced as an explicit result mode.
+- `main.cpp` is not part of the current module build and is now only a stub pointing users to the pybind/CMake smoke workflow.
 
 Impact:
 
@@ -449,7 +447,7 @@ Modernization target:
 
 - Define one authoritative Python API contract.
 - Keep a small test mode constructor exposed for offline validation.
-- Move stale experimental code to an archive or remove it after preserving useful formulas.
+- Keep stale experimental code out of the native module; reintroduce formulas only through documented/tested modes.
 
 ### 8.8 Resource Lifetime Is Manual and Brittle
 
@@ -1277,7 +1275,7 @@ Deployed pybind methods:
 
 Important observations:
 
-- The MeasurementPC `AverageField_try` branch now has commit `c21d901` adding `c_headers` to git. The local development `dev` branch must be rebased/merged onto that commit before source edits, otherwise build cleanup will be based on a stale tree that still lacks the tracked Spectrum headers.
+- The MeasurementPC `AverageField_try` branch added `c_headers` in commit `c21d901`; the local `dev` branch has since been based on that tracked-header state for native source edits.
 - The first Python commands were run from base conda, not `qom`. Base has NumPy/SciPy/Matplotlib/ipympl but no `pybind11`. Future build commands should explicitly activate `qom`.
 - `cmake`, `ninja`, and `cl` were not visible from that PowerShell session. This does not prove they are absent; it only means the current shell PATH does not expose them. On Windows, `cl` is normally available only after opening "x64 Native Tools Command Prompt/PowerShell for VS" or after running `VsDevCmd.bat`.
 - In PowerShell, prefer `Get-Command <tool>` or `where.exe <tool>` over bare `where <tool>`, because `where` can resolve to a PowerShell alias rather than the Windows `where.exe`.
@@ -1333,7 +1331,7 @@ Native repository:
 Path: /Users/vvvoskr/Projects/G2_measurement
 Branch: dev
 Remote: git@github.com:andrey-vasenin/G2_measurement.git
-Current relevant commit: 6e981a4 Add result modes for AverageField outputs
+Current relevant baseline: 9b8cdfd Document native module handoff state
 ```
 
 Important recent dev-branch changes:
@@ -1346,12 +1344,14 @@ Important recent dev-branch changes:
 - Python-facing G1 matrices now use `std::complex<float>` instead of `std::complex<double>`.
 - The old `part` constructor parameter was removed. The full Spectrum segment is now the raw trace length.
 - Native `result_mode` was added to make output allocation and compute work explicit.
+- Native constructor/setter validation now rejects unsupported `second_oversampling`, zero batch/segment/averages, non-divisible `segment % second_oversampling`, invalid digitizer oversampling, `averages % batch != 0`, malformed custom FIR/test/subtraction arrays, invalid calibration channel indexes, and `measure()` calls without a digitizer handle.
+- The first legacy-code cleanup pass removed stale central-peak/correlation-filter APIs, commented pybind G2/G1-filter/interference bindings, stale manual `main.cpp` calls, and unused DSP buffers/functions that were only referenced by commented-out paths. Correlation-downconversion coefficients are now allocated lazily only if the compatibility setter is called. The GEMM-based G2 helper remains in `dsp` for future explicit G2 workflow work.
 
 Validation state:
 
 - Earlier commits up through the getter synchronization and `part` removal passed MeasurementPC tests.
-- The latest `result_mode` commit has only local lightweight validation on macOS: Python smoke script syntax, notebook JSON validity, and `git diff --check`.
-- The latest `result_mode` commit still needs MeasurementPC CUDA build/runtime validation with `cmake --build --preset windows-qom-smoke-all --verbose`.
+- The `result_mode` commit passed MeasurementPC CUDA build/runtime validation with `cmake --build --preset windows-qom-smoke-all --verbose`; the reported smoke output covered `second_oversampling = 1, 2, 4` and `result_mode = average, average_g1, all_correlators`.
+- The current validation/legacy-cleanup commit should be tested on MeasurementPC with the same `windows-qom-smoke-all` preset. The smoke script now also checks invalid constructor inputs and invalid setter calls.
 
 ### 23.2 Current Public Pybind Contract
 
@@ -1537,32 +1537,33 @@ Important workflow instruction from the project owner:
 
 ### 23.6 Planned C++/CUDA Native Refactor Sequence
 
+Completed in the current native cleanup pass:
+
+- Constructor and `set_averages_number` validation now require:
+  - `second_oversampling` in `{1, 2, 4}`,
+  - `segment % second_oversampling == 0`,
+  - `batch > 0`,
+  - `segment > 0`,
+  - `averages > 0`,
+  - `averages % batch == 0`,
+  - `digitizer_oversampling > 0` for the no-hardware constructor,
+  - nonzero digitizer handle for `from_handle` use.
+- Setter validation now requires:
+  - `set_calibration` channel index in `{0, 1}`,
+  - custom `set_firwin` length equal to raw `segment`,
+  - `set_test_input` length exactly `2 * num_channels * segment`,
+  - `set_subtraction_trace` to contain two traces of `resampled_trace_length * batch` complex values.
+- Legacy native surface cleanup removed stale central-peak/correlation-filter methods and commented pybind G2/G1-filter/interference bindings.
+- `main.cpp` is no longer a stale experiment harness that calls removed APIs; the active build/test path remains the pybind module and CMake smoke targets.
+
 Recommended next native changes, in order:
 
-1. Validate constructor inputs.
-   - Require `second_oversampling` to be 1, 2, or 4 before allocating GPU buffers.
-   - Require `trace_length % second_oversampling == 0`.
-   - Require `batch > 0`, `segment > 0`, and `averages` divisible by `batch` or explicitly handle a final partial batch.
-   - Throw clear C++ exceptions that pybind converts to Python exceptions.
-
-2. Delete legacy dead code after `result_mode` is validated on MeasurementPC.
-   - Remove unused `dsp` members that are only referenced in commented code:
-     - `data_for_correlation1/2`
-     - `data_without_central_peak1/2`
-     - `interference_out`
-     - `g1_filt`
-     - inactive `g2_out*` buffers if they are not part of the future GEMM G2 plan
-     - `cross_power_short`
-     - `power1`, `power2`, `power_short`
-   - Remove commented pybind G2/G1-filter/interference bindings.
-   - Either delete stale `main.cpp` or move it to a documented experimental/manual-test target.
-
-3. Make resource ownership safer.
+1. Make resource ownership safer.
    - Replace raw `Digitizer *dig` and `dsp *processor` in `Measurement` with RAII ownership (`std::unique_ptr`) where possible.
    - Make borrowed Spectrum handle ownership explicit, because `from_handle` wraps a handle owned by the Python driver.
    - Make `free()` idempotent and safe after partial construction failures.
 
-4. Split mode-specific DSP responsibilities.
+2. Split mode-specific DSP responsibilities.
    - Keep the public `result_mode` API stable.
    - Internally separate always-needed average/S21 state from G1 and all-correlator state.
    - This can be done with helper structs before larger class splitting:
@@ -1570,26 +1571,26 @@ Recommended next native changes, in order:
      - `G1State`
      - `AllCorrelatorState`
 
-5. Implement native 2-physical-channel mode.
+3. Implement native 2-physical-channel mode.
    - Add a channel layout/config parameter separate from `result_mode`.
    - For 2 physical channels, form only one complex field from `[0, 1]`.
    - Allow only average-field/S21 style outputs in this mode.
    - Reject cross-channel G1/G2/cross-power requests clearly because there is no second complex field.
 
-6. Add intermediate snapshot/chunked measurement support.
+4. Add intermediate snapshot/chunked measurement support.
    - Add a method that processes a fixed number of batches without resetting output devices.
    - Expose processed averages/batches count to Python.
    - Keep relative phase stable by not restarting external signal devices between chunks.
    - For live plotting, prefer average field, S21, G1 diagonal, or small G1 ROI over full G1 matrix transfer.
 
-7. Return large arrays as NumPy buffers directly.
+5. Return large arrays as NumPy buffers directly.
    - Current nested-vector G1 conversion is still expensive.
    - Add pybind `py::array_t<std::complex<float>>` returns for G1 and other large outputs.
    - Keep the existing getters until wrapper migration is complete, or add new getters first:
      - `get_g1_correlator_array()`
      - `get_average_field_array()`
 
-8. Reintroduce only the future G2 path that is actually needed.
+6. Reintroduce only the future G2 path that is actually needed.
    - Keep GEMM-based G2 as the preferred future implementation.
    - Do not restore multiple legacy G2 variants unless the experiment workflow requires them.
    - Put G2 behind a future explicit mode such as `result_mode="g2"` or `result_mode="all_correlators_g2"`.

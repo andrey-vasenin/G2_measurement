@@ -23,25 +23,21 @@ using corr_t = std::vector<trace_t>;
 class Measurement
 {
 private:
-    Digitizer *dig;
-    dsp *processor;
-    size_t segment_size;
-    uint64_t segments_count;
-    uint64_t batch_size;
-    size_t notify_size;
-    uint64_t iters_num;
-    uint64_t iters_done;
-    double sampling_rate;
-    hostbuf buffer;
+    Digitizer *dig = nullptr;
+    dsp *processor = nullptr;
+    size_t segment_size = 0;
+    uint64_t segments_count = 0;
+    uint64_t batch_size = 0;
+    size_t notify_size = 0;
+    uint64_t iters_num = 0;
+    uint64_t iters_done = 0;
+    double sampling_rate = 0.0;
 
-    int second_ovs;
-
-    float max = 0.f;
+    int second_ovs = 1;
 
     thrust::host_vector<int8_t> test_input;
 
     proc_t func;
-    proc_t func_ult_calib;
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
@@ -72,12 +68,6 @@ public:
     void setFirwin(float left_cutoff, float right_cutoff);
     void setFirwin(const stdvec_c window);
 
-    void setCentralPeakWin(float left_cutoff, float right_cutoff);
-    void setCentralPeakWin(const stdvec_c window);
-
-    void setCorrelationFirwin(std::pair<float, float> cutoff_1, std::pair<float, float> cutoff_2);
-    void setCorrelationFirwin(const stdvec_c window1, const stdvec_c window2);
-
     void setIntermediateFrequency(float frequency);
 
     void setCorrDowncovertCoeffs(float freq1, float freq2);
@@ -101,24 +91,6 @@ public:
     stdvec_c getCrossPower();
 
     stdvec_c getCrossSpectrum();
-
-    // corr_t getG1Correlator();
-
-    // corr_t getG1FiltCorrelator();
-
-    // corr_t getG1FiltConjCorrelator();
-  
-    // corr_t getG2Correlator();
-
-    // corr_t getG2CrossSegmentCorrelator();
-
-    // corr_t getG2FilteredCorrelator();
-
-    // corr_t getG2FilteredCrossSegmentCorrelator();
-
-    // stdvec_c getInterferenceResult();
-
-    // stdvec_c getRawG2();
 
     std::vector<stdvec_c> getSubtractionData();
 
