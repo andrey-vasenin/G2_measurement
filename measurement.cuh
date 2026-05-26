@@ -32,6 +32,10 @@ private:
     uint64_t iters_num = 0;
     uint64_t iters_done = 0;
     double sampling_rate = 0.0;
+    ChannelLayout channel_layout = ChannelLayout::TwoComplexFields;
+    int complex_fields = 2;
+    int physical_channels = 4;
+    bool fifo_active = false;
 
     int second_ovs = 1;
 
@@ -43,17 +47,21 @@ private:
     const dsp &requireProcessor() const;
     Digitizer &requireDigitizer();
     Measurement(std::unique_ptr<Digitizer> dig_, uint64_t averages, uint64_t batch,
-                int second_oversampling, const std::string &result_mode);
+                int second_oversampling, const std::string &result_mode,
+                const std::string &channel_layout);
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
-                int second_oversampling, const std::string &result_mode = "average_g1");
+                int second_oversampling, const std::string &result_mode = "average_g1",
+                const std::string &channel_layout = "two_complex");
 
     Measurement(Digitizer *dig_, uint64_t averages, uint64_t batch,
-                int second_oversampling, const std::string &result_mode = "average_g1");
+                int second_oversampling, const std::string &result_mode = "average_g1",
+                const std::string &channel_layout = "two_complex");
 
     Measurement(uint64_t averages, uint64_t batch, long segment, int dig_oversampling,
-                int second_oversampling, const std::string &result_mode = "average_g1");
+                int second_oversampling, const std::string &result_mode = "average_g1",
+                const std::string &channel_layout = "two_complex");
     
     void setDigParameters();
                 
@@ -80,7 +88,17 @@ public:
 
     void measure();
 
+    void startFifo();
+
+    void stopFifo();
+
+    bool isFifoActive() const { requireProcessor(); return fifo_active; }
+
+    void measureBatches(uint64_t batches);
+
     void measureTest();
+
+    void measureTestBatches(uint64_t batches);
 
     void setTestInput(const std::vector<int8_t> &input);
 
@@ -118,8 +136,26 @@ public:
 
     std::string getResultMode() const { return requireProcessor().getResultModeName(); }
 
+    std::string getChannelLayout() const { return requireProcessor().getChannelLayoutName(); }
+
+    int getComplexFieldCount() const { return requireProcessor().getComplexFieldCount(); }
+
+    int getPhysicalChannelCount() const { return requireProcessor().getPhysicalChannelCount(); }
+
+    uint64_t getBatchesTotal() const { requireProcessor(); return iters_num; }
+
+    uint64_t getBatchesDone() const { requireProcessor(); return iters_done; }
+
+    uint64_t getBatchesRemaining() const;
+
+    uint64_t getAveragesTotal() const { requireProcessor(); return segments_count; }
+
+    uint64_t getAveragesDone() const { requireProcessor(); return iters_done * batch_size; }
+
 protected:
     void initializeBuffer();
+
+    void validateRequestedBatches(uint64_t batches) const;
 
     float getIterationsDivisor() const;
 

@@ -123,12 +123,12 @@ AverageField.AverageFieldMeasurer
 Exposed methods:
 
 - Constructors:
-  - `AverageFieldMeasurer(digitizer_handle, averages, batch, second_oversampling, result_mode="average_g1")`
-  - `AverageFieldMeasurer(averages, batch, segment, digitizer_oversampling, second_oversampling, result_mode="average_g1")`
+  - `AverageFieldMeasurer(digitizer_handle, averages, batch, second_oversampling, result_mode="average_g1", channel_layout="two_complex")`
+  - `AverageFieldMeasurer(averages, batch, segment, digitizer_oversampling, second_oversampling, result_mode="average_g1", channel_layout="two_complex")`
 - Configuration: `set_calibration`, `set_firwin`, `set_corr_downconvert_freqs`, `set_amplitude`, `set_intermediate_frequency`, `set_averages_number`, `set_subtraction_trace`
-- Execution: `measure`, `measure_test`, `reset`, `reset_output`, `free`
-- Results: `get_g1_correlator`, `get_g1_other_correlators`, `get_average_field`, `get_s21`, `get_cross_power`, `get_cross_spectrum`, `get_subtraction_trace`, `get_subtraction_data`
-- Shape/mode helpers: `get_total_length`, `get_trace_length`, `get_resampled_trace_length`, `get_result_mode`, `get_out_size`, `get_notify_size`
+- Execution: `measure`, `start_fifo`, `stop_fifo`, `is_fifo_active`, `measure_batches`, `measure_test`, `measure_test_batches`, `reset`, `reset_output`, `free`
+- Results: `get_g1_correlator`, `get_g1_correlator_array`, `get_g1_other_correlators`, `get_g1_other_correlators_array`, `get_average_field`, `get_average_field_array`, `get_s21`, `get_s21_array`, `get_cross_power`, `get_cross_power_array`, `get_cross_spectrum`, `get_cross_spectrum_array`, `get_subtraction_trace`, `get_subtraction_trace_array`, `get_subtraction_data`, `get_subtraction_data_array`
+- Shape/mode/progress helpers: `get_total_length`, `get_trace_length`, `get_resampled_trace_length`, `get_result_mode`, `get_channel_layout`, `get_complex_field_count`, `get_physical_channel_count`, `get_batches_total`, `get_batches_done`, `get_batches_remaining`, `get_averages_total`, `get_averages_done`, `get_out_size`, `get_notify_size`
 
 Wrapper behavior in `/Users/vvvoskr/Projects/QO-measurements/lib2/quantumOptics/averageFieldWrapper.py`:
 
@@ -141,7 +141,7 @@ Wrapper behavior in `/Users/vvvoskr/Projects/QO-measurements/lib2/quantumOptics/
 API drift to note:
 
 - Older wrapper code that passes `part=1` needs to be updated; the dev-branch native API now treats the full digitizer segment as the trace and no longer exposes a `part` constructor parameter.
-- `AverageFieldWrapper.from_test_inputs(...)` must call the 5-argument no-hardware constructor: `(averages, batch, segment, digitizer_oversampling, second_oversampling)`.
+- `AverageFieldWrapper.from_test_inputs(...)` should pass `channel_layout` when wrapper support is added. The default remains `two_complex`.
 - `AverageFieldWrapper.from_digitizer(...)` assumes a `Digitizer*`/object-pointer overload, but pybind does not expose `Measurement(Digitizer*)`.
 - `set_corr_downconvert_freqs` is exposed for compatibility, but the active `dsp::compute` path does not use those coefficients for average-field/G1/cross-power/cross-spectrum outputs. The coefficients are allocated lazily only if this setter is called.
 - G2-related getters are not active pybind API in this branch. The remaining native G2 code is the unexposed GEMM helper reserved for a future explicit G2 mode.
@@ -151,9 +151,10 @@ API drift to note:
 Constants:
 
 - `num_streams = 4`
-- `num_channels = 2` complex channels
-- One complex channel is formed from two int8 digitizer channels: `(I, Q)`.
-- The raw digitizer path therefore assumes four physical int8 channels packed as `char4`: `ch0`, `ch1`, `ch2`, `ch3`.
+- `num_channels = 2` maximum complex fields.
+- `channel_layout="two_complex"` uses four int8 physical channels and forms two complex fields.
+- `channel_layout="one_complex"` uses two int8 physical channels and forms one complex field.
+- The raw digitizer path uses packed `char4` for `two_complex` and packed `char2` for `one_complex`.
 
 For a measurement:
 
@@ -166,7 +167,9 @@ resampled_trace_length    = trace_length / oversampling
 total_length              = batch_size * trace_length
 resampled_total_length    = batch_size * resampled_trace_length
 out_size                  = resampled_trace_length * resampled_trace_length
-notify_size               = 2 * num_channels * segment_size * batch_size bytes
+physical_channel_count    = 4 for two_complex, 2 for one_complex
+complex_field_count       = 2 for two_complex, 1 for one_complex
+notify_size               = physical_channel_count * segment_size * batch_size bytes
 host DMA buffer size      = 4 * notify_size bytes
 ```
 
@@ -181,7 +184,7 @@ Getters for outputs not enabled by the selected mode throw a clear `result_mode`
 Memory model inside `dsp`:
 
 - One pinned host FIFO buffer allocated by `cudaMallocHost`.
-- Four stream lanes, each with its own raw `gpu_data_buf`, complex channel buffers, resampled buffers, G1 accumulators, cross-power accumulator, cross-spectrum accumulator, cuFFT plans, cuBLAS handle, and CUDA stream.
+- Four stream lanes, each with its own raw input buffer, enabled complex field buffers, enabled resampled buffers, mode-specific accumulators, cuFFT plans, optional cuBLAS handle, and CUDA stream.
 - Stream selection is round-robin via `semaphore`.
 - Accumulators are per stream and later summed across all four streams.
 
@@ -218,11 +221,11 @@ Active path in `dsp::compute`:
 
 ```mermaid
 flowchart TD
-    A["Pinned FIFO pointer<br/>int8 packed ch0,ch1,ch2,ch3"] --> B["cudaMemcpy2DAsync<br/>host -> gpu_data_buf[stream]"]
-    B --> C["splitAndConvertDataToMillivolts<br/>char4 -> data1,data2 complex"]
+    A["Pinned FIFO pointer<br/>int8 packed physical channels"] --> B["cudaMemcpy2DAsync<br/>host -> layout-specific GPU input buffer"]
+    B --> C["splitAndConvertDataToMillivolts<br/>char4 -> data1,data2 or char2 -> data1"]
 
     C --> D1["Channel 1 preprocessing"]
-    C --> D2["Channel 2 preprocessing"]
+    C --> D2["Channel 2 preprocessing<br/>(two_complex only)"]
 
     D1 --> E1["applyDownConversionCalibration"]
     E1 --> F1["FFT filter with firwin<br/>cuFFT forward -> window multiply -> inverse -> normalize"]
@@ -253,14 +256,14 @@ flowchart TD
 
 | Accumulator | Meaning in active path | Getter |
 | --- | --- | --- |
-| `subtraction_data1`, `subtraction_data2` | Sum of processed resampled traces after subtraction, per stream and per batch slot | `get_average_field`, `get_subtraction_data`, `get_s21` |
+| `subtraction_data1`, optional `subtraction_data2` | Sum of processed resampled traces after subtraction, per stream and per batch slot | `get_average_field`, `get_subtraction_data`, `get_s21` |
 | `g1` | `data1_resampled` x `data2_resampled_conj` GEMM path, labelled in code as `<S1* S2>` | `get_g1_correlator` |
 | `g1_annihilation` | `data1_resampled` x `data2_resampled` | `get_g1_other_correlators` |
 | `g1_creation` | `data2_resampled_conj` x `data1_resampled_conj` | `get_g1_other_correlators` |
 | `g1_reordered` | `data2_resampled_conj` x `data1_resampled` | `get_g1_other_correlators` |
 | `cross_power` | Per-time-bin accumulated `conj(data1_resampled) * data2_resampled` | `get_cross_power` |
 | `cross_spectrum` | Per-frequency-bin accumulated `conj(FFT(data1_resampled)) * FFT(data2_resampled)` | `get_cross_spectrum` |
-| `s21_sum1`, `s21_sum2` | Device-side scalar reduction buffers used by `getS21` | `get_s21` |
+| `s21_sum1`, optional `s21_sum2` | Device-side scalar reduction buffers used by `getS21` | `get_s21` |
 
 Normalization pattern:
 
@@ -295,6 +298,8 @@ afw = AverageFieldWrapper.from_handle(
     averages=1 << 13 ... 1 << 28,
     batch=int(dig_params["n_seg"]),
     second_oversampling=1,
+    result_mode="average_g1",
+    channel_layout="two_complex",
 )
 afw.set_firwin(...)
 afw.set_amplitude(int(dig_params["ch_amplitude"]))
@@ -306,11 +311,11 @@ afw.measure()
 
 Common result reads:
 
-- `afw.get_average_field()` for two complex traces.
+- `afw.get_average_field_array()` for one or two complex traces.
+- `afw.get_s21_array()` for scalar resonance maps / sweeps.
 - `afw.get_cross_power()` for time-domain cross power.
 - `afw.get_cross_spectrum()` for frequency-domain cross spectrum.
-- `afw.get_g1_correlator()` and `afw.get_g1_all_correlators()` for two-time correlators.
-- `afw.get_s21()` for scalar resonance maps / sweeps.
+- `afw.get_g1_correlator_array()` and `afw.get_g1_all_correlators()` for two-time correlators in `two_complex` mode.
 
 Notebook patterns seen:
 
@@ -1329,7 +1334,7 @@ Native repository:
 Path: /Users/vvvoskr/Projects/G2_measurement
 Branch: dev
 Remote: git@github.com:andrey-vasenin/G2_measurement.git
-Baseline before this mode-state/NumPy-getter update: 8dffc85 Use RAII for measurement resources
+Baseline before this channel-layout/live-chunk update: f9d81a6 Split DSP state and add NumPy getters
 ```
 
 Important recent dev-branch changes:
@@ -1347,6 +1352,12 @@ Important recent dev-branch changes:
   - `G1State` for the main G1 conjugate buffer, G1 accumulator, and cuBLAS handles.
   - `AllCorrelatorState` for the second conjugate buffer, G1-other accumulators, cross-power/cross-spectrum accumulators, shared cross-correlation scratch buffer, and correlation FFT plans.
 - Direct pybind NumPy array getters were added for the current outputs. They return `complex64` arrays and release the GIL while the native result copy/reduction runs.
+- Digitizer handle ownership is explicit: handles passed from Python are borrowed, while native-opened `Digitizer(const char *addr)` handles are owned and closed by the native destructor.
+- Native `channel_layout` was added:
+  - `two_complex` keeps the 4-physical-channel path `[0, 1] -> field 1`, `[2, 3] -> field 2`.
+  - `one_complex` adds the 2-physical-channel path `[0, 1] -> field 1` and is valid only with `result_mode="average"`.
+- Live/chunked measurement support was added through `start_fifo()`, `measure_batches(...)`, `stop_fifo()`, `measure_test_batches(...)`, and progress getters for batches/averages done/remaining.
+- `hardware_fifo_sanity.ipynb` now tests real Spectrum + GPU runs with either channel layout and uses the direct NumPy getters for intermediate plotting.
 - Native constructor/setter validation now rejects unsupported `second_oversampling`, zero batch/segment/averages, non-divisible `segment % second_oversampling`, invalid digitizer oversampling, `averages % batch != 0`, malformed custom FIR/test/subtraction arrays, invalid calibration channel indexes, and `measure()` calls without a digitizer handle.
 - The first legacy-code cleanup pass removed stale central-peak/correlation-filter APIs, commented pybind G2/G1-filter/interference bindings, stale manual `main.cpp` calls, and unused DSP buffers/functions that were only referenced by commented-out paths. Correlation-downconversion coefficients are now allocated lazily only if the compatibility setter is called. The GEMM-based G2 helper remains in `dsp` for future explicit G2 workflow work.
 
@@ -1354,7 +1365,7 @@ Validation state:
 
 - Earlier commits up through the getter synchronization and `part` removal passed MeasurementPC tests.
 - The `result_mode` commit passed MeasurementPC CUDA build/runtime validation with `cmake --build --preset windows-qom-smoke-all --verbose`; the reported smoke output covered `second_oversampling = 1, 2, 4` and `result_mode = average, average_g1, all_correlators`.
-- The current mode-state/NumPy-getter commit should be tested on MeasurementPC with the same `windows-qom-smoke-all` preset. The smoke script now also checks invalid constructor inputs, invalid setter calls, direct NumPy getter availability by `result_mode`, array shapes, and `complex64` dtypes.
+- The current channel-layout/live-chunk commit should be tested on MeasurementPC with the same `windows-qom-smoke-all` preset. The smoke script now checks both `two_complex` and `one_complex`, chunked synthetic measurement, invalid `one_complex` G1 modes, direct NumPy getter availability by `result_mode`, array shapes, and `complex64` dtypes.
 
 ### 23.2 Current Public Pybind Contract
 
@@ -1379,6 +1390,7 @@ AverageFieldMeasurer(
     batch: int,
     second_oversampling: int,
     result_mode: str = "average_g1",
+    channel_layout: str = "two_complex",
 )
 
 AverageFieldMeasurer(
@@ -1388,6 +1400,7 @@ AverageFieldMeasurer(
     digitizer_oversampling: int,
     second_oversampling: int,
     result_mode: str = "average_g1",
+    channel_layout: str = "two_complex",
 )
 ```
 
@@ -1402,6 +1415,26 @@ get_resampled_trace_length()    # processed output trace length
 get_out_size()                  # resampled_trace_length ** 2
 get_notify_size()
 get_result_mode()
+get_channel_layout()
+get_complex_field_count()
+get_physical_channel_count()
+get_batches_total()
+get_batches_done()
+get_batches_remaining()
+get_averages_total()
+get_averages_done()
+```
+
+Measurement methods:
+
+```python
+start_fifo()             # start Spectrum FIFO and keep it running for chunk calls
+stop_fifo()              # stop/invalidate Spectrum FIFO
+is_fifo_active()
+measure()                 # process all remaining batches
+measure_batches(n)        # process n FIFO notifications/chunks
+measure_test()            # synthetic no-hardware path, all remaining batches
+measure_test_batches(n)   # synthetic no-hardware path, n chunks
 ```
 
 Current result getters:
@@ -1420,28 +1453,60 @@ get_subtraction_trace()
 Direct NumPy array getters:
 
 ```python
-get_average_field_array()           # complex64, shape (2, resampled_trace_length)
-get_s21_array()                     # complex64, shape (2,)
+get_average_field_array()           # complex64, shape (complex_field_count, resampled_trace_length)
+get_s21_array()                     # complex64, shape (complex_field_count,)
 get_g1_correlator_array()           # complex64, shape (resampled_trace_length, resampled_trace_length)
 get_g1_other_correlators_array()    # complex64, shape (3, resampled_trace_length, resampled_trace_length)
 get_cross_power_array()             # complex64, shape (resampled_trace_length,)
 get_cross_spectrum_array()          # complex64, shape (resampled_trace_length,)
-get_subtraction_data_array()        # complex64, shape (2, resampled_trace_length * batch)
-get_subtraction_trace_array()       # complex64, shape (2, resampled_trace_length * batch)
+get_subtraction_data_array()        # complex64, shape (complex_field_count, resampled_trace_length * batch)
+get_subtraction_trace_array()       # complex64, shape (complex_field_count, resampled_trace_length * batch)
 ```
 
 Getters for disabled outputs now throw a clear `result_mode` error. Python code should not call heavy-output getters unless the measurer was constructed with a mode that enables them.
 
-### 23.3 Result Modes and Output Availability
+### 23.3 Channel Layouts
+
+`channel_layout="two_complex"`:
+
+- Default and backward-compatible layout.
+- Requires Spectrum driver configuration with physical channels `[0, 1, 2, 3]`.
+- Forms two complex fields:
+
+```text
+physical ch0 + ch1 -> complex field 1
+physical ch2 + ch3 -> complex field 2
+```
+
+- Supports all result modes: `average`, `average_g1`, and `all_correlators`.
+- `get_complex_field_count()` returns `2`; `get_physical_channel_count()` returns `4`.
+
+`channel_layout="one_complex"`:
+
+- New 2-physical-channel layout.
+- Requires Spectrum driver configuration with physical channels `[0, 1]`.
+- Forms one complex field:
+
+```text
+physical ch0 + ch1 -> complex field 1
+```
+
+- Supports only `result_mode="average"`.
+- Cross-channel G1/G2/cross-power/cross-spectrum are rejected because there is no second complex field.
+- `get_average_field_array()`, `get_s21_array()`, `get_subtraction_data_array()`, and `get_subtraction_trace_array()` return first dimension `1`.
+- Compatibility getters still return their old broad shape where necessary: `get_average_field()` returns `(field0, empty_field1)` and `get_s21()` returns `(s21_0, 0j)`.
+- `get_complex_field_count()` returns `1`; `get_physical_channel_count()` returns `2`.
+
+### 23.4 Result Modes and Output Availability
 
 `result_mode="average"`:
 
 - Intended for S21 scans and measurements that only need average field and/or S21.
 - Allocates and computes:
   - raw Spectrum input buffer,
-  - two full-rate complex channel buffers,
-  - two resampled channel buffers,
-  - subtraction accumulators,
+  - enabled full-rate complex field buffers,
+  - enabled resampled field buffers,
+  - subtraction accumulators for enabled fields,
   - FIR/downconversion state,
   - S21 scalar reduction buffers.
 - Does not allocate or compute:
@@ -1504,20 +1569,28 @@ all_correlators:  "all_correlators", "all"
 
 For new QO-measurements code, prefer the canonical names: `average`, `average_g1`, and `all_correlators`.
 
-### 23.4 Current DSP Processing Path
+### 23.5 Current DSP Processing Path
 
-All modes still use the same two-complex-channel processing model:
+The active native compute loop per FIFO batch is layout-aware.
+
+For `two_complex`, input is copied as packed `char4` samples:
 
 ```text
 physical ch0 + ch1 -> complex field 1
 physical ch2 + ch3 -> complex field 2
 ```
 
-The active native compute loop per FIFO batch is:
+For `one_complex`, input is copied as packed `char2` samples:
+
+```text
+physical ch0 + ch1 -> complex field 1
+```
+
+Processing steps:
 
 1. Copy Spectrum FIFO span to GPU with `cudaMemcpy2DAsync`.
 2. Record a CUDA event so the FIFO span is not released before the input copy completes.
-3. Split packed `char4` input into two complex float traces.
+3. Split packed `char4` or `char2` input into complex float traces.
 4. Apply per-channel IQ calibration.
 5. Apply FFT-domain FIR window.
 6. Downconvert.
@@ -1529,9 +1602,7 @@ The active native compute loop per FIFO batch is:
     - one GEMM in `average_g1`,
     - four G1-family GEMMs plus cross-power/cross-spectrum in `all_correlators`.
 
-The code still assumes two complex fields. Native 2-physical-channel Spectrum mode is not implemented yet.
-
-### 23.5 QO-Measurements Integration Guidance
+### 23.6 QO-Measurements Integration Guidance
 
 For the other agent working on `QO-measurements`:
 
@@ -1540,8 +1611,17 @@ For the other agent working on `QO-measurements`:
   - S21 scans: `result_mode="average"`
   - normal pulse measurement with average field + main G1: `result_mode="average_g1"`
   - full correlator experiment: `result_mode="all_correlators"`
+- Choose `channel_layout` explicitly from Spectrum channel configuration:
+  - `channels=[0, 1, 2, 3]`: `channel_layout="two_complex"`
+  - `channels=[0, 1]`: `channel_layout="one_complex"` and `result_mode="average"`
 - If a notebook calls `get_cross_power()`, `get_cross_spectrum()`, or `get_g1_all_correlators()`, it must construct with `result_mode="all_correlators"`.
 - If a notebook only plots average field or S21, use `result_mode="average"` to reduce GPU memory and time.
+- For live plotting, call `start_fifo()`, then `measure_batches(n)` repeatedly, then `stop_fifo()` in a `finally` block. Use:
+  - `get_batches_done()`
+  - `get_averages_done()`
+  - `get_average_field_array()`
+  - `get_s21_array()`
+  - `get_g1_correlator_array()` only in `two_complex` + `average_g1` or `all_correlators`.
 - For axes and array lengths, use `get_resampled_trace_length()` for processed outputs. Use `get_trace_length()` only for raw segment length.
 - For time axes after second oversampling:
 
@@ -1559,7 +1639,7 @@ Important workflow instruction from the project owner:
 
 - Do not make more changes in `QO-measurements` from this native-module thread unless explicitly requested.
 
-### 23.6 Planned C++/CUDA Native Refactor Sequence
+### 23.7 Planned C++/CUDA Native Refactor Sequence
 
 Completed in the current native cleanup pass:
 
@@ -1573,45 +1653,39 @@ Completed in the current native cleanup pass:
   - `digitizer_oversampling > 0` for the no-hardware constructor,
   - nonzero digitizer handle for `from_handle` use.
 - Setter validation now requires:
-  - `set_calibration` channel index in `{0, 1}`,
+  - `set_calibration` channel index in `{0, 1}` for `two_complex` or `{0}` for `one_complex`,
   - custom `set_firwin` length equal to raw `segment`,
-  - `set_test_input` length exactly `2 * num_channels * segment`,
-  - `set_subtraction_trace` to contain two traces of `resampled_trace_length * batch` complex values.
+  - `set_test_input` length exactly `physical_channel_count * segment`,
+  - `set_subtraction_trace` to contain `complex_field_count` traces of `resampled_trace_length * batch` complex values.
 - Legacy native surface cleanup removed stale central-peak/correlation-filter methods and commented pybind G2/G1-filter/interference bindings.
 - `main.cpp` is no longer a stale experiment harness that calls removed APIs; the active build/test path remains the pybind module and CMake smoke targets.
 - `Measurement` now owns its `Digitizer` wrapper and `dsp` processor with `std::unique_ptr`; `free()` is idempotent and post-free method calls throw explicit errors.
 - `dsp` state is split into `AverageState`, `G1State`, and `AllCorrelatorState`, so future 2-physical-channel mode and live snapshot paths can be added without spreading mode checks across unrelated buffers.
 - Pybind now exposes direct `complex64` NumPy getters for average field, S21, main G1, G1-other, cross-power, cross-spectrum, subtraction data, and subtraction trace. Existing getters remain available for compatibility.
+- `Digitizer(const char *addr)` now owns and closes native-opened Spectrum handles; the pybind integer-handle constructor remains borrowed and does not close the Python-owned handle.
+- `channel_layout` supports both 4-physical-channel and 2-physical-channel Spectrum configurations.
+- `start_fifo()`, `stop_fifo()`, `measure_batches(...)`, and `measure_test_batches(...)` support incremental accumulation and live plotting without resetting the native output accumulators. The hardware notebook keeps FIFO active across chunk calls.
+- `hardware_fifo_sanity.ipynb` is the current in-repository hardware test notebook for real digitizer + GPU validation.
 
 Recommended next native changes, in order:
 
-1. Clarify `Digitizer` handle ownership.
-   - The pybind `from_handle` path should continue to treat the Spectrum handle as borrowed.
-   - If the native address-opening constructor is kept, set and test `created_here = true` so it closes handles it opens.
+1. Validate the new hardware notebook on MeasurementPC.
+   - First test `CHANNEL_LAYOUT="two_complex"` with `RESULT_MODE="average_g1"`.
+   - Then test `CHANNEL_LAYOUT="one_complex"` with `RESULT_MODE="average"` and Spectrum `channels=[0, 1]`.
+   - Confirm chunked `start_fifo(); measure_batches(...); stop_fifo()` does not disturb external output-device phase assumptions in the actual experiment sequence.
 
-2. Implement native 2-physical-channel mode.
-   - Add a channel layout/config parameter separate from `result_mode`.
-   - For 2 physical channels, form only one complex field from `[0, 1]`.
-   - Allow only average-field/S21 style outputs in this mode.
-   - Reject cross-channel G1/G2/cross-power requests clearly because there is no second complex field.
-
-3. Add intermediate snapshot/chunked measurement support.
-   - Add a method that processes a fixed number of batches without resetting output devices.
-   - Expose processed averages/batches count to Python.
-   - Keep relative phase stable by not restarting external signal devices between chunks.
-   - For live plotting, prefer average field, S21, G1 diagonal, or small G1 ROI over full G1 matrix transfer.
-
-4. Migrate `QO-measurements` wrappers/notebooks to the new NumPy getters.
+2. Migrate `QO-measurements` wrappers/notebooks to the new NumPy getters and channel-layout argument.
    - Prefer `get_average_field_array()`, `get_s21_array()`, and `get_g1_correlator_array()` for new plotting code.
    - Keep compatibility conversion only for notebooks that still depend on nested Python sequences.
    - Use `result_mode` checks before requesting heavy outputs.
+   - Pass `channel_layout` based on configured Spectrum channels.
 
-5. Reintroduce only the future G2 path that is actually needed.
+3. Reintroduce only the future G2 path that is actually needed.
    - Keep GEMM-based G2 as the preferred future implementation.
    - Do not restore multiple legacy G2 variants unless the experiment workflow requires them.
    - Put G2 behind a future explicit mode such as `result_mode="g2"` or `result_mode="all_correlators_g2"`.
 
-### 23.7 MeasurementPC Test Plan After Each Native Refactor
+### 23.8 MeasurementPC Test Plan After Each Native Refactor
 
 Minimum test loop:
 
@@ -1628,12 +1702,13 @@ The current smoke test should cover:
 ```text
 second_oversampling = 1, 2, 4
 result_mode = average, average_g1, all_correlators
+channel_layout = two_complex, one_complex
 ```
 
-After native smoke passes, deploy the `.pyd` into `QO-measurements` only when notebook testing is needed:
+After native smoke passes, use `hardware_fifo_sanity.ipynb` in this repository for real Spectrum + GPU testing from the build directory. Deploy the `.pyd` into `QO-measurements` only when notebook testing of the external wrapper repository is needed:
 
 ```bat
 copy /Y C:\Users\Qop\AverageField\build\windows-qom-ninja\AverageField.cp313-win_amd64.pyd C:\Users\Qop\QO-measurements\lib2\quantumOptics\
 ```
 
-Then run a minimal hardware sanity notebook/cell sequence before running long scans.
+For first hardware validation, run the notebook twice: first with `CHANNEL_LAYOUT="two_complex"` and `RESULT_MODE="average_g1"`, then with `CHANNEL_LAYOUT="one_complex"` and `RESULT_MODE="average"`.

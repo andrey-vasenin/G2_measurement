@@ -119,7 +119,7 @@ void validateSamplerate(double samplerate)
 
 // DSP constructor
 dsp::dsp(size_t len, uint64_t n,
-    double samplerate, int second_oversampling, ResultMode mode) :
+    double samplerate, int second_oversampling, ResultMode mode, ChannelLayout layout) :
     trace_length{ requirePositiveSize(len, "trace_length") },
     oversampling{ validateSecondOversampling(trace_length, second_oversampling) },
     resampled_trace_length{ trace_length / static_cast<size_t>(oversampling) },
@@ -128,15 +128,23 @@ dsp::dsp(size_t len, uint64_t n,
     total_length{ checkedProduct(batch_size, trace_length, "batch * trace_length") },
     resampled_total_length{ checkedProduct(batch_size, resampled_trace_length, "batch * resampled_trace_length") },
     out_size{ checkedProduct(resampled_trace_length, resampled_trace_length, "resampled_trace_length ** 2") },
-    result_mode{ mode }
+    result_mode{ mode },
+    channel_layout{ layout },
+    complex_fields{ complexFieldCount(layout) },
+    physical_channels{ physicalChannelCount(layout) }
 {
     validateSamplerate(samplerate);
+    if (!hasSecondField() && result_mode != ResultMode::AverageOnly)
+        throw std::runtime_error("channel_layout='one_complex' only supports result_mode='average'");
     downconversion_coeffs.resize(total_length, tcf(0.f));
     firwin.resize(total_length, tcf(0.f)); // GPU memory for the filtering window
     average_state.subtraction_trace1.resize(resampled_total_length, tcf(0.f));
-    average_state.subtraction_trace2.resize(resampled_total_length, tcf(0.f));
     average_state.tmp1.resize(resampled_trace_length, tcf(0.f));
-    average_state.tmp2.resize(resampled_trace_length, tcf(0.f));
+    if (hasSecondField())
+    {
+        average_state.subtraction_trace2.resize(resampled_total_length, tcf(0.f));
+        average_state.tmp2.resize(resampled_trace_length, tcf(0.f));
+    }
     if (hasAllCorrelators())
         all_state.tmp_cross.resize(resampled_trace_length, tcf(0.f));
     int device_id;
@@ -149,7 +157,10 @@ dsp::dsp(size_t len, uint64_t n,
     // Allocate arrays on GPU for every stream
     for (int i = 0; i < num_streams; i++)
     {
-        average_state.gpu_data_buf[i].resize(total_length, char4{ 0,0,0,0 });
+        if (hasSecondField())
+            average_state.gpu_data_buf[i].resize(total_length, char4{ 0,0,0,0 });
+        else
+            average_state.gpu_data_buf_one[i].resize(total_length, char2{ 0,0 });
         // Create streams for parallel data processing
         handleError(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
         handleError(cudaEventCreateWithFlags(&input_copy_done[i], cudaEventDisableTiming));
@@ -167,12 +178,15 @@ dsp::dsp(size_t len, uint64_t n,
 
         // Allocate arrays on GPU for every channel of digitizer
         average_state.data1[i].resize(total_length, tcf(0.f));
-        average_state.data2[i].resize(total_length, tcf(0.f));
         average_state.data1_resampled[i].resize(resampled_total_length, tcf(0.f));
-        average_state.data2_resampled[i].resize(resampled_total_length, tcf(0.f));
-
         average_state.subtraction_data1[i].resize(resampled_total_length, tcf(0.f));
-        average_state.subtraction_data2[i].resize(resampled_total_length, tcf(0.f));
+
+        if (hasSecondField())
+        {
+            average_state.data2[i].resize(total_length, tcf(0.f));
+            average_state.data2_resampled[i].resize(resampled_total_length, tcf(0.f));
+            average_state.subtraction_data2[i].resize(resampled_total_length, tcf(0.f));
+        }
 
         if (hasG1())
         {
@@ -218,7 +232,8 @@ dsp::dsp(size_t len, uint64_t n,
 
     // Scalar reduction accumulators (avoid per-call allocations in getS21)
     this->handleError(cudaMalloc(reinterpret_cast<void**>(&average_state.s21_sum1), sizeof(float2)));
-    this->handleError(cudaMalloc(reinterpret_cast<void**>(&average_state.s21_sum2), sizeof(float2)));
+    if (hasSecondField())
+        this->handleError(cudaMalloc(reinterpret_cast<void**>(&average_state.s21_sum2), sizeof(float2)));
 }
 
 // DSP destructor
@@ -367,6 +382,11 @@ void dsp::applyDownConversionCalibration(gpuvec_c& data, cudaStream_t& stream, i
     thrust::for_each(sync_exec_policy, data.begin(), data.end(), calibration_functor(a_qi[channel_num], a_qq[channel_num], c_i[channel_num], c_q[channel_num]));
 }
 
+bool dsp::hasSecondField() const
+{
+    return complex_fields == 2;
+}
+
 bool dsp::hasG1() const
 {
     return result_mode == ResultMode::AverageG1 || result_mode == ResultMode::AllCorrelators;
@@ -395,7 +415,8 @@ void dsp::resetOutput()
     for (int i = 0; i < num_streams; i++)
     {
         thrust::fill(average_state.subtraction_data1[i].begin(), average_state.subtraction_data1[i].end(), tcf(0));
-        thrust::fill(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), tcf(0));
+        if (hasSecondField())
+            thrust::fill(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), tcf(0));
         if (hasG1())
             thrust::fill(g1_state.g1[i].begin(), g1_state.g1[i].end(), tcf(0));
         if (hasAllCorrelators())
@@ -414,8 +435,16 @@ int dsp::compute(const hostbuf buffer_ptr)
     const int stream_num = semaphore;
     switchStream();
 
-    copyDataFromBuffer(buffer_ptr, average_state.gpu_data_buf[stream_num], stream_num);
-    splitAndConvertDataToMillivolts(average_state.data1[stream_num], average_state.data2[stream_num], average_state.gpu_data_buf[stream_num], streams[stream_num]);
+    if (hasSecondField())
+    {
+        copyDataFromBuffer(buffer_ptr, average_state.gpu_data_buf[stream_num], stream_num);
+        splitAndConvertDataToMillivolts(average_state.data1[stream_num], average_state.data2[stream_num], average_state.gpu_data_buf[stream_num], streams[stream_num]);
+    }
+    else
+    {
+        copyDataFromBuffer(buffer_ptr, average_state.gpu_data_buf_one[stream_num], stream_num);
+        splitAndConvertDataToMillivolts(average_state.data1[stream_num], average_state.gpu_data_buf_one[stream_num], streams[stream_num]);
+    }
 
     // Preprocessing Data 1
     applyDownConversionCalibration(average_state.data1[stream_num], streams[stream_num], 0);
@@ -433,18 +462,21 @@ int dsp::compute(const hostbuf buffer_ptr)
     }
 
     // Preprocessing Data 2
-    applyDownConversionCalibration(average_state.data2[stream_num], streams[stream_num], 1);
-    applyFilter(average_state.data2[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
-    downconvert(average_state.data2[stream_num], stream_num);
-    resample(average_state.data2[stream_num], average_state.data2_resampled[stream_num], streams[stream_num]);
-    subtractDataFromOutput(average_state.subtraction_trace2, average_state.data2_resampled[stream_num], stream_num);
-    addDataToOutput(average_state.data2_resampled[stream_num], average_state.subtraction_data2[stream_num], stream_num);
-    if (hasG1())
+    if (hasSecondField())
     {
-        thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
-            average_state.data2_resampled[stream_num].begin(), average_state.data2_resampled[stream_num].end(),
-            g1_state.data2_resampled_conj[stream_num].begin(),
-            complex_conjugate());
+        applyDownConversionCalibration(average_state.data2[stream_num], streams[stream_num], 1);
+        applyFilter(average_state.data2[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
+        downconvert(average_state.data2[stream_num], stream_num);
+        resample(average_state.data2[stream_num], average_state.data2_resampled[stream_num], streams[stream_num]);
+        subtractDataFromOutput(average_state.subtraction_trace2, average_state.data2_resampled[stream_num], stream_num);
+        addDataToOutput(average_state.data2_resampled[stream_num], average_state.subtraction_data2[stream_num], stream_num);
+        if (hasG1())
+        {
+            thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
+                average_state.data2_resampled[stream_num].begin(), average_state.data2_resampled[stream_num].end(),
+                g1_state.data2_resampled_conj[stream_num].begin(),
+                complex_conjugate());
+        }
     }
 
     if (hasG1())
@@ -502,8 +534,21 @@ void dsp::synchronize()
 void dsp::copyDataFromBuffer(const hostbuf buffer_ptr,
     gpubuf& dst, int stream_num)
 {
-    size_t width = 2 * num_channels * trace_length * sizeof(int8_t);
-    size_t src_pitch = 2 * num_channels * pitch * sizeof(int8_t);
+    size_t width = static_cast<size_t>(physical_channels) * trace_length * sizeof(int8_t);
+    size_t src_pitch = static_cast<size_t>(physical_channels) * pitch * sizeof(int8_t);
+    size_t dst_pitch = width;
+    size_t height = batch_size;
+    handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
+        static_cast<const void*>(buffer_ptr), src_pitch, width, height,
+        cudaMemcpyHostToDevice, streams[stream_num]));
+    handleError(cudaEventRecord(input_copy_done[stream_num], streams[stream_num]));
+}
+
+void dsp::copyDataFromBuffer(const hostbuf buffer_ptr,
+    gpubuf_one& dst, int stream_num)
+{
+    size_t width = static_cast<size_t>(physical_channels) * trace_length * sizeof(int8_t);
+    size_t src_pitch = static_cast<size_t>(physical_channels) * pitch * sizeof(int8_t);
     size_t dst_pitch = width;
     size_t height = batch_size;
     handleError(cudaMemcpy2DAsync(thrust::raw_pointer_cast(dst.data()), dst_pitch,
@@ -519,6 +564,14 @@ void dsp::splitAndConvertDataToMillivolts(gpuvec_c& data_left, gpuvec_c& data_ri
     auto end = thrust::make_zip_iterator(gpu_buf.end(), data_left.end(), data_right.end());
     thrust::for_each(thrust::cuda::par_nosync.on(stream),
         begin, end, thrust::make_zip_function(millivolts_functor(scale)));
+}
+
+void dsp::splitAndConvertDataToMillivolts(gpuvec_c& data, const gpubuf_one& gpu_buf, const cudaStream_t& stream)
+{
+    auto begin = thrust::make_zip_iterator(gpu_buf.begin(), data.begin());
+    auto end = thrust::make_zip_iterator(gpu_buf.end(), data.end());
+    thrust::for_each(thrust::cuda::par_nosync.on(stream),
+        begin, end, thrust::make_zip_function(millivolts_one_functor(scale)));
 }
 
 // Applies the filter with the specified window to the data using FFT convolution
@@ -749,12 +802,52 @@ __global__ void s21Reduce(
     }
 }
 
+__global__ void s21ReduceOne(
+    const tcf* __restrict__ s1_0,
+    const tcf* __restrict__ s1_1,
+    const tcf* __restrict__ s1_2,
+    const tcf* __restrict__ s1_3,
+    float2* __restrict__ out,
+    size_t n)
+{
+    float2 local{ 0.f, 0.f };
+
+    for (size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+         i < n;
+         i += static_cast<size_t>(blockDim.x) * gridDim.x)
+    {
+        tcf v = s1_0[i] + s1_1[i] + s1_2[i] + s1_3[i];
+        local.x += v.real();
+        local.y += v.imag();
+    }
+
+    __shared__ float2 smem[256];
+    smem[threadIdx.x] = local;
+    __syncthreads();
+
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (threadIdx.x < s)
+        {
+            smem[threadIdx.x].x += smem[threadIdx.x + s].x;
+            smem[threadIdx.x].y += smem[threadIdx.x + s].y;
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0)
+    {
+        atomicAdd(&out->x, smem[0].x);
+        atomicAdd(&out->y, smem[0].y);
+    }
+}
+
 std::pair<stdvec_c, stdvec_c> dsp::getAverageField()
 {
     synchronize();
     const int length = getResampledTraceLength();
     stdvec_c h_tmp1(length);
-    stdvec_c h_tmp2(length);
+    stdvec_c h_tmp2(hasSecondField() ? length : 0);
     sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
         thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
         thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
@@ -762,16 +855,19 @@ std::pair<stdvec_c, stdvec_c> dsp::getAverageField()
         thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
         thrust::raw_pointer_cast(average_state.tmp1.data()), length, batch_size);
     handleError(cudaGetLastError());
-    sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
-        thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
-        thrust::raw_pointer_cast(average_state.tmp2.data()), length, batch_size);
-    handleError(cudaGetLastError());
     // Copy reduced averages to host vectors.
     handleError(cudaMemcpy(h_tmp1.data(), thrust::raw_pointer_cast(average_state.tmp1.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
-    handleError(cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(average_state.tmp2.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    if (hasSecondField())
+    {
+        sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
+            thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
+            thrust::raw_pointer_cast(average_state.tmp2.data()), length, batch_size);
+        handleError(cudaGetLastError());
+        handleError(cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(average_state.tmp2.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    }
     return { h_tmp1, h_tmp2 };
 }
 
@@ -784,30 +880,45 @@ std::pair<std::complex<float>, std::complex<float>> dsp::getS21()
         return { std::complex<float>(0.f, 0.f), std::complex<float>(0.f, 0.f) };
 
     this->handleError(cudaMemset(average_state.s21_sum1, 0, sizeof(float2)));
-    this->handleError(cudaMemset(average_state.s21_sum2, 0, sizeof(float2)));
+    if (hasSecondField())
+        this->handleError(cudaMemset(average_state.s21_sum2, 0, sizeof(float2)));
 
     constexpr int threads = 256;
     int blocks = static_cast<int>((n + threads - 1) / threads);
     if (blocks > 1024) blocks = 1024;
 
-    s21Reduce<<<blocks, threads>>>(
-        thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data1[2].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
-        thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
-        average_state.s21_sum1,
-        average_state.s21_sum2,
-        n);
+    if (hasSecondField())
+    {
+        s21Reduce<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[2].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
+            average_state.s21_sum1,
+            average_state.s21_sum2,
+            n);
+    }
+    else
+    {
+        s21ReduceOne<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[2].data()),
+            thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
+            average_state.s21_sum1,
+            n);
+    }
     this->handleError(cudaGetLastError());
 
     float2 h1{ 0.f, 0.f };
     float2 h2{ 0.f, 0.f };
     this->handleError(cudaMemcpy(&h1, average_state.s21_sum1, sizeof(float2), cudaMemcpyDeviceToHost));
-    this->handleError(cudaMemcpy(&h2, average_state.s21_sum2, sizeof(float2), cudaMemcpyDeviceToHost));
+    if (hasSecondField())
+        this->handleError(cudaMemcpy(&h2, average_state.s21_sum2, sizeof(float2), cudaMemcpyDeviceToHost));
 
     float inv_points = 1.0f / static_cast<float>(n);
     return {
@@ -858,18 +969,22 @@ std::vector<hostvec_c> dsp::getCumulativeSubtrData()
 {
     std::vector<hostvec_c> subtr_data;
     gpuvec_c f1(average_state.subtraction_data1[0].size(), tcf(0));
-    gpuvec_c f2(average_state.subtraction_data2[0].size(), tcf(0));
+    gpuvec_c f2(hasSecondField() ? average_state.subtraction_data2[0].size() : 0, tcf(0));
     synchronize();
     for (int i = 0; i < num_streams; i++)
     {
         thrust::transform(average_state.subtraction_data1[i].begin(), average_state.subtraction_data1[i].end(), f1.begin(), f1.begin(), thrust::plus<tcf>());
-        thrust::transform(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), f2.begin(), f2.begin(), thrust::plus<tcf>());
+        if (hasSecondField())
+            thrust::transform(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), f2.begin(), f2.begin(), thrust::plus<tcf>());
     }
 
     hostvec_c s1 = f1;
-    hostvec_c s2 = f2;
     subtr_data.push_back(s1);
-    subtr_data.push_back(s2);
+    if (hasSecondField())
+    {
+        hostvec_c s2 = f2;
+        subtr_data.push_back(s2);
+    }
     return subtr_data;
 }
 
@@ -900,20 +1015,25 @@ void dsp::setAmplitude(int ampl)
 void dsp::setSubtractionTrace(hostvec_c trace[num_channels])
 {
     average_state.subtraction_trace1 = trace[0];
-    average_state.subtraction_trace2 = trace[1];
+    if (hasSecondField())
+        average_state.subtraction_trace2 = trace[1];
 }
 
 void dsp::getSubtractionTrace(std::vector<stdvec_c>& trace)
 {
     synchronize();
     hostvec_c h_subtr_trace1 = average_state.subtraction_trace1;
-    hostvec_c h_subtr_trace2 = average_state.subtraction_trace2;
     trace.push_back(stdvec_c(h_subtr_trace1.begin(), h_subtr_trace1.end()));
-    trace.push_back(stdvec_c(h_subtr_trace2.begin(), h_subtr_trace2.end()));
+    if (hasSecondField())
+    {
+        hostvec_c h_subtr_trace2 = average_state.subtraction_trace2;
+        trace.push_back(stdvec_c(h_subtr_trace2.begin(), h_subtr_trace2.end()));
+    }
 }
 
 void dsp::resetSubtractionTrace()
 {
     thrust::fill(average_state.subtraction_trace1.begin(), average_state.subtraction_trace1.end(), tcf(0));
-    thrust::fill(average_state.subtraction_trace2.begin(), average_state.subtraction_trace2.end(), tcf(0));
+    if (hasSecondField())
+        thrust::fill(average_state.subtraction_trace2.begin(), average_state.subtraction_trace2.end(), tcf(0));
 }

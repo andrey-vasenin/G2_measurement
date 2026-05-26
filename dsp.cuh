@@ -21,7 +21,7 @@
 const int num_streams = 4;
 const int cal_mat_size = 16;
 const int cal_mat_side = 4;
-const int num_channels = 2; // number of used digitizer channels (complex)
+const int num_channels = 2; // maximum number of complex fields
 
 typedef thrust::complex<float> tcf;
 typedef thrust::device_vector<float> gpuvec;
@@ -29,6 +29,7 @@ typedef thrust::host_vector<float> hostvec;
 typedef thrust::device_vector<tcf> gpuvec_c;
 typedef thrust::host_vector<tcf> hostvec_c;
 typedef thrust::device_vector<char4> gpubuf;
+typedef thrust::device_vector<char2> gpubuf_one;
 typedef int8_t *hostbuf;
 typedef std::vector<float> stdvec;
 typedef std::vector<std::complex<float>> stdvec_c;
@@ -55,6 +56,35 @@ inline const char *resultModeName(ResultMode mode)
     }
 }
 
+enum class ChannelLayout
+{
+    OneComplexField,
+    TwoComplexFields
+};
+
+inline const char *channelLayoutName(ChannelLayout layout)
+{
+    switch (layout)
+    {
+    case ChannelLayout::OneComplexField:
+        return "one_complex";
+    case ChannelLayout::TwoComplexFields:
+        return "two_complex";
+    default:
+        return "unknown";
+    }
+}
+
+inline int complexFieldCount(ChannelLayout layout)
+{
+    return (layout == ChannelLayout::OneComplexField) ? 1 : 2;
+}
+
+inline int physicalChannelCount(ChannelLayout layout)
+{
+    return (layout == ChannelLayout::OneComplexField) ? 2 : 4;
+}
+
 template <typename T>
 inline T *get(thrust::device_vector<T> vec)
 {
@@ -76,6 +106,7 @@ inline Npp32f *to_Npp32f_p(T *v)
 struct AverageState
 {
     gpubuf gpu_data_buf[num_streams];
+    gpubuf_one gpu_data_buf_one[num_streams];
     gpuvec_c data1[num_streams];
     gpuvec_c data2[num_streams];
     gpuvec_c data1_resampled[num_streams];
@@ -137,6 +168,9 @@ private:
     size_t resampled_total_length;
     size_t out_size;
     ResultMode result_mode;
+    ChannelLayout channel_layout;
+    int complex_fields;
+    int physical_channels;
     int semaphore = 0;           // for selecting the current stream
     float scale = 500.f / 128.f; // for conversion into mV // max int8 is 127
 
@@ -159,11 +193,18 @@ private:
     float a_qi[num_channels], a_qq[num_channels], c_i[num_channels], c_q[num_channels];
 
 public:
-    dsp(size_t len, uint64_t n, double samplerate, int second_oversampling, ResultMode mode);
+    dsp(size_t len, uint64_t n, double samplerate, int second_oversampling, ResultMode mode,
+        ChannelLayout layout);
 
     ~dsp();
 
     const char *getResultModeName() const { return resultModeName(result_mode); }
+
+    const char *getChannelLayoutName() const { return channelLayoutName(channel_layout); }
+
+    int getComplexFieldCount() const { return complex_fields; }
+
+    int getPhysicalChannelCount() const { return physical_channels; }
 
     int getTraceLength();
 
@@ -229,6 +270,8 @@ public:
     void setAmplitude(int ampl);
 
 protected:
+    bool hasSecondField() const;
+
     bool hasG1() const;
 
     bool hasAllCorrelators() const;
@@ -247,7 +290,12 @@ protected:
     void copyDataFromBuffer(const hostbuf buffer_ptr, 
                                         gpubuf &dst, int stream_num);
 
+    void copyDataFromBuffer(const hostbuf buffer_ptr,
+                                        gpubuf_one &dst, int stream_num);
+
     void splitAndConvertDataToMillivolts(gpuvec_c &data_left, gpuvec_c &data_right, const gpubuf &gpu_buf, const cudaStream_t &stream);
+
+    void splitAndConvertDataToMillivolts(gpuvec_c &data, const gpubuf_one &gpu_buf, const cudaStream_t &stream);
 
     void downconvert(gpuvec_c &data, int stream_num);
 

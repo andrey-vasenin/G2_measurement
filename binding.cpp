@@ -73,16 +73,22 @@ stdvec_c stackEqualLengthRows(const std::vector<stdvec_c> &rows, const char *nam
 PYBIND11_MODULE(AverageField, m)
 {
     py::class_<Measurement>(m, "AverageFieldMeasurer", py::module_local())
-        .def(py::init<std::uintptr_t, uint64_t, uint64_t, int, std::string>(),
+        .def(py::init<std::uintptr_t, uint64_t, uint64_t, int, std::string, std::string>(),
              "digitizer_handle"_a, "averages"_a, "batch"_a, "second_oversampling"_a, "result_mode"_a = "average_g1",
+             "channel_layout"_a = "two_complex",
              output_and_gil_guard())
-        .def(py::init<uint64_t, uint64_t, long, int, int, std::string>(),
+        .def(py::init<uint64_t, uint64_t, long, int, int, std::string, std::string>(),
              "averages"_a, "batch"_a, "segment"_a, "digitizer_oversampling"_a, "second_oversampling"_a, "result_mode"_a = "average_g1",
+             "channel_layout"_a = "two_complex",
              output_and_gil_guard())
         .def("set_calibration", &Measurement::setCalibration, output_and_gil_guard())
         .def("set_firwin", py::overload_cast<float, float>(&Measurement::setFirwin), output_and_gil_guard(), "Set rectangular window")
         .def("set_firwin", py::overload_cast<const stdvec_c>(&Measurement::setFirwin), output_and_gil_guard(), "Set custom window")
         .def("measure", &Measurement::measure, output_and_gil_guard())
+        .def("start_fifo", &Measurement::startFifo, output_and_gil_guard())
+        .def("stop_fifo", &Measurement::stopFifo, output_and_gil_guard())
+        .def("is_fifo_active", &Measurement::isFifoActive, output_and_gil_guard())
+        .def("measure_batches", &Measurement::measureBatches, output_and_gil_guard())
         .def("get_g1_correlator", &Measurement::getG1Correlator, output_and_gil_guard())
         .def("get_g1_other_correlators", &Measurement::getG1OtherCorrelators, output_and_gil_guard())
         .def("get_g1_correlator_array", [](Measurement &measurement)
@@ -123,9 +129,10 @@ PYBIND11_MODULE(AverageField, m)
             std::vector<stdvec_c> rows;
             rows.reserve(2);
             rows.push_back(std::move(average.first));
-            rows.push_back(std::move(average.second));
+            if (!average.second.empty())
+                rows.push_back(std::move(average.second));
             const py::ssize_t length = static_cast<py::ssize_t>(rows.empty() ? 0 : rows.front().size());
-            return makeComplexArray(stackEqualLengthRows(rows, "average_field"), {2, length});
+            return makeComplexArray(stackEqualLengthRows(rows, "average_field"), {static_cast<py::ssize_t>(rows.size()), length});
         })
         .def("get_s21", &Measurement::getS21, output_and_gil_guard())
         .def("get_s21_array", [](Measurement &measurement)
@@ -135,7 +142,10 @@ PYBIND11_MODULE(AverageField, m)
                 py::gil_scoped_release release;
                 s21 = measurement.getS21();
             }
-            return makeComplexArray(stdvec_c{s21.first, s21.second}, {2});
+            stdvec_c values{s21.first};
+            if (measurement.getComplexFieldCount() == 2)
+                values.push_back(s21.second);
+            return makeComplexArray(values, {static_cast<py::ssize_t>(values.size())});
         })
         .def("get_cross_power", &Measurement::getCrossPower, output_and_gil_guard())
         .def("get_cross_power_array", [](Measurement &measurement)
@@ -162,6 +172,7 @@ PYBIND11_MODULE(AverageField, m)
         .def("reset_output", &Measurement::resetOutput, output_and_gil_guard())
         .def("free", &Measurement::free, output_and_gil_guard())
         .def("measure_test", &Measurement::measureTest, output_and_gil_guard())
+        .def("measure_test_batches", &Measurement::measureTestBatches, output_and_gil_guard())
         .def("set_test_input", &Measurement::setTestInput, output_and_gil_guard())
         .def("set_subtraction_trace", &Measurement::setSubtractionTrace, output_and_gil_guard())
         .def("get_subtraction_trace", &Measurement::getSubtractionTrace, output_and_gil_guard())
@@ -193,6 +204,14 @@ PYBIND11_MODULE(AverageField, m)
         .def("get_trace_length", &Measurement::getTraceLength, output_and_gil_guard())
         .def("get_resampled_trace_length", &Measurement::getResampledTraceLength, output_and_gil_guard())
         .def("get_result_mode", &Measurement::getResultMode, output_and_gil_guard())
+        .def("get_channel_layout", &Measurement::getChannelLayout, output_and_gil_guard())
+        .def("get_complex_field_count", &Measurement::getComplexFieldCount, output_and_gil_guard())
+        .def("get_physical_channel_count", &Measurement::getPhysicalChannelCount, output_and_gil_guard())
+        .def("get_batches_total", &Measurement::getBatchesTotal, output_and_gil_guard())
+        .def("get_batches_done", &Measurement::getBatchesDone, output_and_gil_guard())
+        .def("get_batches_remaining", &Measurement::getBatchesRemaining, output_and_gil_guard())
+        .def("get_averages_total", &Measurement::getAveragesTotal, output_and_gil_guard())
+        .def("get_averages_done", &Measurement::getAveragesDone, output_and_gil_guard())
         .def("get_out_size", &Measurement::getOutSize, output_and_gil_guard())
         .def("get_notify_size", &Measurement::getNotifySize, output_and_gil_guard());
 }

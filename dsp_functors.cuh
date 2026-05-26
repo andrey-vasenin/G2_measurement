@@ -45,6 +45,19 @@ struct millivolts_functor
     }
 };
 
+struct millivolts_one_functor
+{
+    const float scale;
+
+    millivolts_one_functor(float s) : scale(s) {}
+
+    __device__ inline void operator()(const char2 &b, tcf &d)
+    {
+        d.real(static_cast<float>(b.x) * scale);
+        d.imag(static_cast<float>(b.y) * scale);
+    }
+};
+
 struct field_functor
 {
     __device__ inline void operator()(const tcf &x, const tcf &y, tcf &z)

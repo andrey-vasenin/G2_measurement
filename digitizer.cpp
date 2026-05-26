@@ -23,6 +23,7 @@ Digitizer::Digitizer(const char *addr)
     {
         throw std::runtime_error("Digitizer can not be imported");
     }
+    created_here = true;
     this->loadProperties();
 }
 
@@ -37,11 +38,16 @@ Digitizer::Digitizer(void *h)
 // Digitizer destructor
 Digitizer::~Digitizer()
 {
-    if (created_here)
+    if (created_here && handle != nullptr)
     {
         spcm_vClose(handle);
         handle = nullptr;
     }
+}
+
+bool Digitizer::ownsHandle() const
+{
+    return created_here;
 }
 
 // private method to use with initializer

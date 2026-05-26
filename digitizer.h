@@ -37,6 +37,8 @@ public:
     ~Digitizer();
 
     /* Getters */
+    bool ownsHandle() const;
+
     int32 getSlotNumber();
 
     size_t getBufferSize();
