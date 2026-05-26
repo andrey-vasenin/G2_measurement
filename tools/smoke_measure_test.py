@@ -144,14 +144,22 @@ def _run_invalid_constructor_cases(module) -> None:
 
 def _run_invalid_setter_cases(module) -> None:
     measurer = module.AverageFieldMeasurer(2, 2, 16, 1, 1, "average")
+    freed = False
     try:
         _assert_runtime_error(lambda: measurer.set_calibration(2, 1.0, 0.0, 0.0, 0.0), "bad calibration channel", "line_num")
         _assert_runtime_error(lambda: measurer.set_firwin([1.0 + 0.0j] * 15), "bad FIR length", "firwin")
         _assert_runtime_error(lambda: measurer.set_test_input([0] * 63), "bad test input length", "test_input")
         _assert_runtime_error(lambda: measurer.set_subtraction_trace([[0.0 + 0.0j] * 16]), "bad subtraction trace count", "subtraction_trace")
         _assert_runtime_error(measurer.measure, "measure without digitizer", "digitizer")
-    finally:
         measurer.free()
+        freed = True
+        _assert_runtime_error(measurer.get_result_mode, "getter after free", "freed")
+        _assert_runtime_error(lambda: measurer.set_averages_number(2), "setter after free", "freed")
+        _assert_runtime_error(measurer.measure_test, "measure_test after free", "freed")
+        measurer.free()
+    finally:
+        if not freed:
+            measurer.free()
     print("invalid setter checks passed")
 
 

@@ -449,9 +449,9 @@ Modernization target:
 - Keep a small test mode constructor exposed for offline validation.
 - Keep stale experimental code out of the native module; reintroduce formulas only through documented/tested modes.
 
-### 8.8 Resource Lifetime Is Manual and Brittle
+### 8.8 Resource Lifetime
 
-`AverageFieldWrapper.close()` and `.free()` call the native `free()` method manually. Native `Measurement::free()` deletes `processor` and `dig`, then nulls pointers. The destructor calls `free()` if either pointer is non-null.
+`AverageFieldWrapper.close()` and `.free()` call the native `free()` method manually. Dev branch update: native `Measurement` now owns its `Digitizer` wrapper and `dsp` processor with `std::unique_ptr`, the destructor relies on RAII, and `free()` is idempotent. Public methods that require native resources now throw a clear "freed or not initialized" error after `free()`.
 
 Additional issue:
 
@@ -459,15 +459,13 @@ Additional issue:
 
 Impact:
 
-- Manual `free()` is easy to call while Python still holds a wrapper that allows method calls.
-- Native ownership rules are implicit.
+- Manual `free()` is still part of the current Python API and wrappers should continue to avoid using an object after close.
 - Direct address-based `Digitizer` use can leak a card handle.
 
 Modernization target:
 
-- Use RAII (`std::unique_ptr`) inside `Measurement`.
 - Remove public `free()` from the normal Python workflow if possible; rely on deterministic context manager plus destructor safety.
-- Track borrowed vs owned digitizer handle explicitly.
+- Track borrowed vs owned digitizer handle explicitly inside `Digitizer` if the address-based constructor is kept for native/manual tests.
 
 ### 8.9 Getter Return Types Are Costly
 
@@ -1555,21 +1553,21 @@ Completed in the current native cleanup pass:
   - `set_subtraction_trace` to contain two traces of `resampled_trace_length * batch` complex values.
 - Legacy native surface cleanup removed stale central-peak/correlation-filter methods and commented pybind G2/G1-filter/interference bindings.
 - `main.cpp` is no longer a stale experiment harness that calls removed APIs; the active build/test path remains the pybind module and CMake smoke targets.
+- `Measurement` now owns its `Digitizer` wrapper and `dsp` processor with `std::unique_ptr`; `free()` is idempotent and post-free method calls throw explicit errors.
 
 Recommended next native changes, in order:
 
-1. Make resource ownership safer.
-   - Replace raw `Digitizer *dig` and `dsp *processor` in `Measurement` with RAII ownership (`std::unique_ptr`) where possible.
-   - Make borrowed Spectrum handle ownership explicit, because `from_handle` wraps a handle owned by the Python driver.
-   - Make `free()` idempotent and safe after partial construction failures.
-
-2. Split mode-specific DSP responsibilities.
+1. Split mode-specific DSP responsibilities.
    - Keep the public `result_mode` API stable.
    - Internally separate always-needed average/S21 state from G1 and all-correlator state.
    - This can be done with helper structs before larger class splitting:
      - `AverageState`
      - `G1State`
      - `AllCorrelatorState`
+
+2. Clarify `Digitizer` handle ownership.
+   - The pybind `from_handle` path should continue to treat the Spectrum handle as borrowed.
+   - If the native address-opening constructor is kept, set and test `created_here = true` so it closes handles it opens.
 
 3. Implement native 2-physical-channel mode.
    - Add a channel layout/config parameter separate from `result_mode`.

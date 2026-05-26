@@ -23,8 +23,8 @@ using corr_t = std::vector<trace_t>;
 class Measurement
 {
 private:
-    Digitizer *dig = nullptr;
-    dsp *processor = nullptr;
+    std::unique_ptr<Digitizer> dig;
+    std::unique_ptr<dsp> processor;
     size_t segment_size = 0;
     uint64_t segments_count = 0;
     uint64_t batch_size = 0;
@@ -38,6 +38,12 @@ private:
     thrust::host_vector<int8_t> test_input;
 
     proc_t func;
+
+    dsp &requireProcessor();
+    const dsp &requireProcessor() const;
+    Digitizer &requireDigitizer();
+    Measurement(std::unique_ptr<Digitizer> dig_, uint64_t averages, uint64_t batch,
+                int second_oversampling, const std::string &result_mode);
 
 public:
     Measurement(std::uintptr_t dig_handle, uint64_t averages, uint64_t batch,
@@ -74,8 +80,6 @@ public:
 
     void measure();
 
-    void asyncCurrentSwitch();
-
     void measureTest();
 
     void setTestInput(const std::vector<int8_t> &input);
@@ -98,17 +102,17 @@ public:
 
     std::vector<stdvec_c> getSubtractionTrace();
 
-    int getTotalLength() { return processor->getTotalLength(); }
+    int getTotalLength() { return requireProcessor().getTotalLength(); }
 
-    int getTraceLength() { return processor->getTraceLength(); }
+    int getTraceLength() { return requireProcessor().getTraceLength(); }
 
-    int getResampledTraceLength() { return processor->getResampledTraceLength(); }
+    int getResampledTraceLength() { return requireProcessor().getResampledTraceLength(); }
 
-    int getOutSize() { return processor->getOutSize(); }
+    int getOutSize() { return requireProcessor().getOutSize(); }
 
-    size_t getNotifySize() { return notify_size; }
+    size_t getNotifySize() { requireProcessor(); return notify_size; }
 
-    std::string getResultMode() const { return processor->getResultModeName(); }
+    std::string getResultMode() const { return requireProcessor().getResultModeName(); }
 
 protected:
     void initializeBuffer();
