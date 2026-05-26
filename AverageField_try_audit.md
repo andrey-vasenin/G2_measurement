@@ -75,9 +75,9 @@ flowchart LR
 Observed build constraints:
 
 - `CMAKE_CXX_STANDARD` and `CMAKE_CUDA_STANDARD` are both `20`.
-- `CMAKE_CUDA_ARCHITECTURES` is hardcoded to `75`.
-- `CMAKE_CUDA_FLAGS` enables `--extended-lambda`.
-- Python and pybind11 paths are hardcoded to `C:/Users/Qop/miniconda3/envs/measurement`.
+- `CMAKE_CUDA_ARCHITECTURES` defaults to `native` and the `windows-qom-ninja` preset also sets it to `native`; the MeasurementPC verbose build emitted `-arch=native`, so it is no longer hardcoded to the old `sm_75` target.
+- CUDA compilation enables `--extended-lambda`.
+- The active preset uses the `qom` conda environment paths.
 - `SPCM_ROOT_DIR` is hardcoded to `c_header`, but that directory is ignored and absent in this checkout.
 - VISA is linked even though the active source list does not currently include the older Yokogawa/VISA control code.
 - The external QO project documents the deployed `.pyd` as `AverageField.cp313-win_amd64.pyd`, with Python locked to 3.13 and CUDA 13 DLL directories registered before import.
@@ -1317,7 +1317,7 @@ The build cleanup should target this environment explicitly:
 - Python ABI: `cp313-win_amd64`
 - preferred conda env: `qom`
 - CUDA toolkit: `CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0`
-- GPU architecture: RTX 5090, so CMake should not remain hardcoded only to architecture `75`; it should expose `CMAKE_CUDA_ARCHITECTURES` as a preset/cache value.
+- GPU architecture: RTX 5090. `CMAKE_CUDA_ARCHITECTURES` is now exposed as a cache/preset value and defaults to `native`.
 
 ## 23. C++/CUDA Module Handoff State and Planned Native Changes
 
