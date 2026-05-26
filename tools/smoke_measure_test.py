@@ -6,6 +6,8 @@ import math
 import os
 from pathlib import Path
 
+import numpy as np
+
 
 def _add_dll_directories() -> None:
     cuda_path = os.environ.get("CUDA_PATH")
@@ -95,6 +97,16 @@ def _assert_matrix_shape(matrix, side: int, label: str) -> None:
     for row_idx, row in enumerate(matrix):
         if len(row) != side:
             raise AssertionError(f"{label}[{row_idx}]: column count {len(row)} != expected {side}")
+
+
+def _assert_complex64_array(actual, shape: tuple[int, ...], label: str) -> np.ndarray:
+    arr = np.asarray(actual)
+    if arr.shape != shape:
+        raise AssertionError(f"{label}: shape {arr.shape} != expected {shape}")
+    if arr.dtype != np.dtype(np.complex64):
+        raise AssertionError(f"{label}: dtype {arr.dtype} != expected complex64")
+    _assert_finite(arr.ravel(), label)
+    return arr
 
 
 def _assert_unavailable(func, label: str) -> None:
@@ -214,30 +226,50 @@ def _run_case(
         _assert_sequence_close(list(average_ch1), expected_ch1, "average_field[0]", tol)
         _assert_sequence_close(list(average_ch2), expected_ch2, "average_field[1]", tol)
 
+        average_array = _assert_complex64_array(measurer.get_average_field_array(), (2, out_len), "average_field_array")
+        _assert_sequence_close(average_array[0].tolist(), expected_ch1, "average_field_array[0]", tol)
+        _assert_sequence_close(average_array[1].tolist(), expected_ch2, "average_field_array[1]", tol)
+
         s21_1, s21_2 = measurer.get_s21()
         _assert_close(complex(s21_1), sum(expected_ch1, 0j) / out_len, "s21[0]", tol)
         _assert_close(complex(s21_2), sum(expected_ch2, 0j) / out_len, "s21[1]", tol)
 
+        s21_array = _assert_complex64_array(measurer.get_s21_array(), (2,), "s21_array")
+        _assert_close(complex(s21_array[0]), sum(expected_ch1, 0j) / out_len, "s21_array[0]", tol)
+        _assert_close(complex(s21_array[1]), sum(expected_ch2, 0j) / out_len, "s21_array[1]", tol)
+
         if result_mode == "average":
             _assert_unavailable(measurer.get_g1_correlator, "get_g1_correlator")
+            _assert_unavailable(measurer.get_g1_correlator_array, "get_g1_correlator_array")
             _assert_unavailable(measurer.get_g1_other_correlators, "get_g1_other_correlators")
+            _assert_unavailable(measurer.get_g1_other_correlators_array, "get_g1_other_correlators_array")
             _assert_unavailable(measurer.get_cross_power, "get_cross_power")
+            _assert_unavailable(measurer.get_cross_power_array, "get_cross_power_array")
             _assert_unavailable(measurer.get_cross_spectrum, "get_cross_spectrum")
+            _assert_unavailable(measurer.get_cross_spectrum_array, "get_cross_spectrum_array")
         else:
             g1 = measurer.get_g1_correlator()
             _assert_matrix_shape(g1, out_len, "g1")
+            g1_array = _assert_complex64_array(measurer.get_g1_correlator_array(), (out_len, out_len), "g1_array")
             for idx in range(out_len):
                 expected_diag = expected_ch1[idx] * expected_ch2[idx].conjugate()
                 _assert_close(complex(g1[idx][idx]), expected_diag, f"g1[{idx}][{idx}]", tol)
+                _assert_close(complex(g1_array[idx, idx]), expected_diag, f"g1_array[{idx},{idx}]", tol)
 
             if result_mode == "average_g1":
                 _assert_unavailable(measurer.get_g1_other_correlators, "get_g1_other_correlators")
+                _assert_unavailable(measurer.get_g1_other_correlators_array, "get_g1_other_correlators_array")
                 _assert_unavailable(measurer.get_cross_power, "get_cross_power")
+                _assert_unavailable(measurer.get_cross_power_array, "get_cross_power_array")
                 _assert_unavailable(measurer.get_cross_spectrum, "get_cross_spectrum")
+                _assert_unavailable(measurer.get_cross_spectrum_array, "get_cross_spectrum_array")
             else:
                 cross_power = list(measurer.get_cross_power())
                 expected_cross_power = [a.conjugate() * b for a, b in zip(expected_ch1, expected_ch2)]
                 _assert_sequence_close(cross_power, expected_cross_power, "cross_power", tol)
+
+                cross_power_array = _assert_complex64_array(measurer.get_cross_power_array(), (out_len,), "cross_power_array")
+                _assert_sequence_close(cross_power_array.tolist(), expected_cross_power, "cross_power_array", tol)
 
                 other_g1 = measurer.get_g1_other_correlators()
                 if len(other_g1) != 3:
@@ -245,10 +277,13 @@ def _run_case(
                 for idx, matrix in enumerate(other_g1):
                     _assert_matrix_shape(matrix, out_len, f"g1_other[{idx}]")
 
+                _assert_complex64_array(measurer.get_g1_other_correlators_array(), (3, out_len, out_len), "g1_other_array")
+
                 cross_spectrum = list(measurer.get_cross_spectrum())
                 if len(cross_spectrum) != out_len:
                     raise AssertionError("get_cross_spectrum returned an unexpected length")
                 _assert_finite(cross_spectrum, "cross_spectrum")
+                _assert_complex64_array(measurer.get_cross_spectrum_array(), (out_len,), "cross_spectrum_array")
 
         subtraction_data = measurer.get_subtraction_data()
         if len(subtraction_data) != 2:
@@ -257,6 +292,7 @@ def _run_case(
             if len(trace) != out_len * batch:
                 raise AssertionError(f"subtraction_data[{idx}] returned an unexpected length")
             _assert_finite(trace, f"subtraction_data[{idx}]")
+        _assert_complex64_array(measurer.get_subtraction_data_array(), (2, out_len * batch), "subtraction_data_array")
 
         subtraction_trace = measurer.get_subtraction_trace()
         if len(subtraction_trace) != 2:
@@ -265,6 +301,7 @@ def _run_case(
             if len(trace) != out_len * batch:
                 raise AssertionError(f"subtraction_trace[{idx}] returned an unexpected length")
             _assert_finite(trace, f"subtraction_trace[{idx}]")
+        _assert_complex64_array(measurer.get_subtraction_trace_array(), (2, out_len * batch), "subtraction_trace_array")
     finally:
         measurer.free()
 

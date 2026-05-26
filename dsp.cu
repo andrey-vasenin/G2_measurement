@@ -133,11 +133,12 @@ dsp::dsp(size_t len, uint64_t n,
     validateSamplerate(samplerate);
     downconversion_coeffs.resize(total_length, tcf(0.f));
     firwin.resize(total_length, tcf(0.f)); // GPU memory for the filtering window
-    subtraction_trace1.resize(resampled_total_length, tcf(0.f));
-    subtraction_trace2.resize(resampled_total_length, tcf(0.f));
-    tmp1.resize(resampled_trace_length, tcf(0.f));
-    tmp2.resize(resampled_trace_length, tcf(0.f));
-    tmp_cross.resize(resampled_trace_length, tcf(0.f));
+    average_state.subtraction_trace1.resize(resampled_total_length, tcf(0.f));
+    average_state.subtraction_trace2.resize(resampled_total_length, tcf(0.f));
+    average_state.tmp1.resize(resampled_trace_length, tcf(0.f));
+    average_state.tmp2.resize(resampled_trace_length, tcf(0.f));
+    if (hasAllCorrelators())
+        all_state.tmp_cross.resize(resampled_trace_length, tcf(0.f));
     int device_id;
     cudaGetDevice(&device_id);
     cudaDeviceProp prop;
@@ -148,7 +149,7 @@ dsp::dsp(size_t len, uint64_t n,
     // Allocate arrays on GPU for every stream
     for (int i = 0; i < num_streams; i++)
     {
-        gpu_data_buf[i].resize(total_length, char4{ 0,0,0,0 });
+        average_state.gpu_data_buf[i].resize(total_length, char4{ 0,0,0,0 });
         // Create streams for parallel data processing
         handleError(cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking));
         handleError(cudaEventCreateWithFlags(&input_copy_done[i], cudaEventDisableTiming));
@@ -165,28 +166,28 @@ dsp::dsp(size_t len, uint64_t n,
 
 
         // Allocate arrays on GPU for every channel of digitizer
-        data1[i].resize(total_length, tcf(0.f));
-        data2[i].resize(total_length, tcf(0.f));
-        data1_resampled[i].resize(resampled_total_length, tcf(0.f));
-        data2_resampled[i].resize(resampled_total_length, tcf(0.f));
+        average_state.data1[i].resize(total_length, tcf(0.f));
+        average_state.data2[i].resize(total_length, tcf(0.f));
+        average_state.data1_resampled[i].resize(resampled_total_length, tcf(0.f));
+        average_state.data2_resampled[i].resize(resampled_total_length, tcf(0.f));
 
-        subtraction_data1[i].resize(resampled_total_length, tcf(0.f));
-        subtraction_data2[i].resize(resampled_total_length, tcf(0.f));
+        average_state.subtraction_data1[i].resize(resampled_total_length, tcf(0.f));
+        average_state.subtraction_data2[i].resize(resampled_total_length, tcf(0.f));
 
         if (hasG1())
         {
-            data2_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
-            g1[i].resize(out_size, tcf(0.f));
+            g1_state.data2_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
+            g1_state.g1[i].resize(out_size, tcf(0.f));
         }
 
         if (hasAllCorrelators())
         {
-            data1_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
-            g1_annihilation[i].resize(out_size, tcf(0.f));
-            g1_creation[i].resize(out_size, tcf(0.f));
-            g1_reordered[i].resize(out_size, tcf(0.f));
-            cross_power[i].resize(resampled_total_length, tcf(0.f));
-            cross_spectrum[i].resize(resampled_total_length, tcf(0.f));
+            all_state.data1_resampled_conj[i].resize(resampled_total_length, tcf(0.f));
+            all_state.g1_annihilation[i].resize(out_size, tcf(0.f));
+            all_state.g1_creation[i].resize(out_size, tcf(0.f));
+            all_state.g1_reordered[i].resize(out_size, tcf(0.f));
+            all_state.cross_power[i].resize(resampled_total_length, tcf(0.f));
+            all_state.cross_spectrum[i].resize(resampled_total_length, tcf(0.f));
         }
 
         // Initialize cuFFT plans
@@ -198,26 +199,26 @@ dsp::dsp(size_t len, uint64_t n,
             "Error assigning a stream to a cuFFT plan\n");
         if (hasAllCorrelators())
         {
-            check_cufft_error(cufftPlan1d(&corr_plans[i], static_cast<int>(resampled_trace_length),
+            check_cufft_error(cufftPlan1d(&all_state.corr_plans[i], static_cast<int>(resampled_trace_length),
                 CUFFT_C2C, static_cast<int>(batch_size)),
                 "Error initializing cuFFT plan\n");
-            check_cufft_error(cufftSetStream(corr_plans[i], streams[i]),
+            check_cufft_error(cufftSetStream(all_state.corr_plans[i], streams[i]),
                 "Error assigning a stream to a cuFFT plan\n");
         }
         if (hasG1())
         {
             // Initialize cuBLAS
-            check_cublas_error(cublasCreate(&cublas_handles[i]),
+            check_cublas_error(cublasCreate(&g1_state.cublas_handles[i]),
                 "Error initializing a cuBLAS handle\n");
             // Assign streams to cuBLAS handles
-            check_cublas_error(cublasSetStream(cublas_handles[i], streams[i]),
+            check_cublas_error(cublasSetStream(g1_state.cublas_handles[i], streams[i]),
                 "Error assigning a stream to a cuBLAS handle\n");
         }
     }
 
     // Scalar reduction accumulators (avoid per-call allocations in getS21)
-    this->handleError(cudaMalloc(reinterpret_cast<void**>(&s21_sum1), sizeof(float2)));
-    this->handleError(cudaMalloc(reinterpret_cast<void**>(&s21_sum2), sizeof(float2)));
+    this->handleError(cudaMalloc(reinterpret_cast<void**>(&average_state.s21_sum1), sizeof(float2)));
+    this->handleError(cudaMalloc(reinterpret_cast<void**>(&average_state.s21_sum2), sizeof(float2)));
 }
 
 // DSP destructor
@@ -225,21 +226,21 @@ dsp::~dsp()
 {
     deleteBuffer();
 
-    if (s21_sum1 != nullptr)
-        cudaFree(s21_sum1);
-    if (s21_sum2 != nullptr)
-        cudaFree(s21_sum2);
+    if (average_state.s21_sum1 != nullptr)
+        cudaFree(average_state.s21_sum1);
+    if (average_state.s21_sum2 != nullptr)
+        cudaFree(average_state.s21_sum2);
 
     for (int i = 0; i < num_streams; i++)
     {
         // Destroy cuBLAS
         if (hasG1())
-            cublasDestroy(cublas_handles[i]);
+            cublasDestroy(g1_state.cublas_handles[i]);
 
         // Destroy cuFFT plans
         cufftDestroy(plans[i]);
         if (hasAllCorrelators())
-            cufftDestroy(corr_plans[i]);
+            cufftDestroy(all_state.corr_plans[i]);
 
         // Destroy GPU streams
         handleError(cudaEventDestroy(input_copy_done[i]));
@@ -393,17 +394,17 @@ void dsp::resetOutput()
 {
     for (int i = 0; i < num_streams; i++)
     {
-        thrust::fill(subtraction_data1[i].begin(), subtraction_data1[i].end(), tcf(0));
-        thrust::fill(subtraction_data2[i].begin(), subtraction_data2[i].end(), tcf(0));
+        thrust::fill(average_state.subtraction_data1[i].begin(), average_state.subtraction_data1[i].end(), tcf(0));
+        thrust::fill(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), tcf(0));
         if (hasG1())
-            thrust::fill(g1[i].begin(), g1[i].end(), tcf(0));
+            thrust::fill(g1_state.g1[i].begin(), g1_state.g1[i].end(), tcf(0));
         if (hasAllCorrelators())
         {
-            thrust::fill(g1_annihilation[i].begin(), g1_annihilation[i].end(), tcf(0));
-            thrust::fill(g1_creation[i].begin(), g1_creation[i].end(), tcf(0));
-            thrust::fill(g1_reordered[i].begin(), g1_reordered[i].end(), tcf(0));
-            thrust::fill(cross_power[i].begin(), cross_power[i].end(), tcf(0));
-            thrust::fill(cross_spectrum[i].begin(), cross_spectrum[i].end(), tcf(0));
+            thrust::fill(all_state.g1_annihilation[i].begin(), all_state.g1_annihilation[i].end(), tcf(0));
+            thrust::fill(all_state.g1_creation[i].begin(), all_state.g1_creation[i].end(), tcf(0));
+            thrust::fill(all_state.g1_reordered[i].begin(), all_state.g1_reordered[i].end(), tcf(0));
+            thrust::fill(all_state.cross_power[i].begin(), all_state.cross_power[i].end(), tcf(0));
+            thrust::fill(all_state.cross_spectrum[i].begin(), all_state.cross_spectrum[i].end(), tcf(0));
         }
     }
 }
@@ -413,71 +414,71 @@ int dsp::compute(const hostbuf buffer_ptr)
     const int stream_num = semaphore;
     switchStream();
 
-    copyDataFromBuffer(buffer_ptr, gpu_data_buf[stream_num], stream_num);
-    splitAndConvertDataToMillivolts(data1[stream_num], data2[stream_num], gpu_data_buf[stream_num], streams[stream_num]);
+    copyDataFromBuffer(buffer_ptr, average_state.gpu_data_buf[stream_num], stream_num);
+    splitAndConvertDataToMillivolts(average_state.data1[stream_num], average_state.data2[stream_num], average_state.gpu_data_buf[stream_num], streams[stream_num]);
 
     // Preprocessing Data 1
-    applyDownConversionCalibration(data1[stream_num], streams[stream_num], 0);
-    applyFilter(data1[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
-    downconvert(data1[stream_num], stream_num);
-    resample(data1[stream_num], data1_resampled[stream_num], streams[stream_num]);
-    subtractDataFromOutput(subtraction_trace1, data1_resampled[stream_num], stream_num);
-    addDataToOutput(data1_resampled[stream_num], subtraction_data1[stream_num], stream_num);
+    applyDownConversionCalibration(average_state.data1[stream_num], streams[stream_num], 0);
+    applyFilter(average_state.data1[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
+    downconvert(average_state.data1[stream_num], stream_num);
+    resample(average_state.data1[stream_num], average_state.data1_resampled[stream_num], streams[stream_num]);
+    subtractDataFromOutput(average_state.subtraction_trace1, average_state.data1_resampled[stream_num], stream_num);
+    addDataToOutput(average_state.data1_resampled[stream_num], average_state.subtraction_data1[stream_num], stream_num);
     if (hasAllCorrelators())
     {
         thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
-            data1_resampled[stream_num].begin(), data1_resampled[stream_num].end(),
-            data1_resampled_conj[stream_num].begin(),
+            average_state.data1_resampled[stream_num].begin(), average_state.data1_resampled[stream_num].end(),
+            all_state.data1_resampled_conj[stream_num].begin(),
             complex_conjugate());
     }
 
     // Preprocessing Data 2
-    applyDownConversionCalibration(data2[stream_num], streams[stream_num], 1);
-    applyFilter(data2[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
-    downconvert(data2[stream_num], stream_num);
-    resample(data2[stream_num], data2_resampled[stream_num], streams[stream_num]);
-    subtractDataFromOutput(subtraction_trace2, data2_resampled[stream_num], stream_num);
-    addDataToOutput(data2_resampled[stream_num], subtraction_data2[stream_num], stream_num);
+    applyDownConversionCalibration(average_state.data2[stream_num], streams[stream_num], 1);
+    applyFilter(average_state.data2[stream_num], firwin, stream_num, trace_length, plans[stream_num]);
+    downconvert(average_state.data2[stream_num], stream_num);
+    resample(average_state.data2[stream_num], average_state.data2_resampled[stream_num], streams[stream_num]);
+    subtractDataFromOutput(average_state.subtraction_trace2, average_state.data2_resampled[stream_num], stream_num);
+    addDataToOutput(average_state.data2_resampled[stream_num], average_state.subtraction_data2[stream_num], stream_num);
     if (hasG1())
     {
         thrust::transform(thrust::cuda::par_nosync.on(streams[stream_num]),
-            data2_resampled[stream_num].begin(), data2_resampled[stream_num].end(),
-            data2_resampled_conj[stream_num].begin(),
+            average_state.data2_resampled[stream_num].begin(), average_state.data2_resampled[stream_num].end(),
+            g1_state.data2_resampled_conj[stream_num].begin(),
             complex_conjugate());
     }
 
     if (hasG1())
-        calculateG1gemm(data1_resampled[stream_num], data2_resampled_conj[stream_num], g1[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2>
+        calculateG1gemm(average_state.data1_resampled[stream_num], g1_state.data2_resampled_conj[stream_num], g1_state.g1[stream_num], g1_state.cublas_handles[stream_num], op_n, op_t); // <S1* S2>
     if (hasAllCorrelators())
     {
-        calculateG1gemm(data1_resampled[stream_num], data2_resampled[stream_num], g1_annihilation[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1 S2>
-        calculateG1gemm(data2_resampled_conj[stream_num], data1_resampled_conj[stream_num], g1_creation[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
-        calculateG1gemm(data2_resampled_conj[stream_num], data1_resampled[stream_num], g1_reordered[stream_num], cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
+        calculateG1gemm(average_state.data1_resampled[stream_num], average_state.data2_resampled[stream_num], all_state.g1_annihilation[stream_num], g1_state.cublas_handles[stream_num], op_n, op_t); // <S1 S2>
+        calculateG1gemm(g1_state.data2_resampled_conj[stream_num], all_state.data1_resampled_conj[stream_num], all_state.g1_creation[stream_num], g1_state.cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
+        calculateG1gemm(g1_state.data2_resampled_conj[stream_num], average_state.data1_resampled[stream_num], all_state.g1_reordered[stream_num], g1_state.cublas_handles[stream_num], op_n, op_t); // <S1* S2*>
 
         // Cross-power: conj(data1_resampled) * data2_resampled
         auto cross_power_begin = thrust::make_zip_iterator(
-            data1_resampled[stream_num].begin(),
-            data2_resampled[stream_num].begin(),
-            cross_power[stream_num].begin());
+            average_state.data1_resampled[stream_num].begin(),
+            average_state.data2_resampled[stream_num].begin(),
+            all_state.cross_power[stream_num].begin());
         auto cross_power_end = thrust::make_zip_iterator(
-            data1_resampled[stream_num].end(),
-            data2_resampled[stream_num].end(),
-            cross_power[stream_num].end());
+            average_state.data1_resampled[stream_num].end(),
+            average_state.data2_resampled[stream_num].end(),
+            all_state.cross_power[stream_num].end());
         thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
             cross_power_begin, cross_power_end,
             thrust::make_zip_function(cross_corr_accum_functor()));
 
         // Cross-spectrum: conj(fft(data1_resampled)) * fft(data2_resampled)
-        calculateFFT(data1_resampled[stream_num], stream_num, CUFFT_FORWARD, corr_plans[stream_num]);
-        calculateFFT(data2_resampled[stream_num], stream_num, CUFFT_FORWARD, corr_plans[stream_num]);
+        calculateFFT(average_state.data1_resampled[stream_num], stream_num, CUFFT_FORWARD, all_state.corr_plans[stream_num]);
+        calculateFFT(average_state.data2_resampled[stream_num], stream_num, CUFFT_FORWARD, all_state.corr_plans[stream_num]);
         auto cross_spectrum_begin = thrust::make_zip_iterator(
-            data1_resampled[stream_num].begin(),
-            data2_resampled[stream_num].begin(),
-            cross_spectrum[stream_num].begin());
+            average_state.data1_resampled[stream_num].begin(),
+            average_state.data2_resampled[stream_num].begin(),
+            all_state.cross_spectrum[stream_num].begin());
         auto cross_spectrum_end = thrust::make_zip_iterator(
-            data1_resampled[stream_num].end(),
-            data2_resampled[stream_num].end(),
-            cross_spectrum[stream_num].end());
+            average_state.data1_resampled[stream_num].end(),
+            average_state.data2_resampled[stream_num].end(),
+            all_state.cross_spectrum[stream_num].end());
         thrust::for_each(thrust::cuda::par_nosync.on(streams[stream_num]),
             cross_spectrum_begin, cross_spectrum_end,
             thrust::make_zip_function(cross_corr_accum_functor()));
@@ -646,16 +647,16 @@ thrust::host_vector<T> dsp::getCumulativeTrace(const thrust::device_vector<T>* t
 hostvec_c dsp::getG1Result()
 {
     requireG1("get_g1_correlator");
-    return getCumulativeTrace(g1, tcf(batch_size));
+    return getCumulativeTrace(g1_state.g1, tcf(batch_size));
 }
 
 std::tuple<hostvec_c, hostvec_c, hostvec_c> dsp::getG1OtherResults()
 {
     requireAllCorrelators("get_g1_other_correlators");
     return {
-        getCumulativeTrace(g1_reordered, tcf(batch_size)),
-        getCumulativeTrace(g1_creation, tcf(batch_size)),
-        getCumulativeTrace(g1_annihilation, tcf(batch_size))
+        getCumulativeTrace(all_state.g1_reordered, tcf(batch_size)),
+        getCumulativeTrace(all_state.g1_creation, tcf(batch_size)),
+        getCumulativeTrace(all_state.g1_annihilation, tcf(batch_size))
     };
 }
 
@@ -755,22 +756,22 @@ std::pair<stdvec_c, stdvec_c> dsp::getAverageField()
     stdvec_c h_tmp1(length);
     stdvec_c h_tmp2(length);
     sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
-        thrust::raw_pointer_cast(subtraction_data1[0].data()),
-        thrust::raw_pointer_cast(subtraction_data1[1].data()),
-        thrust::raw_pointer_cast(subtraction_data1[2].data()),
-        thrust::raw_pointer_cast(subtraction_data1[3].data()),
-        thrust::raw_pointer_cast(tmp1.data()), length, batch_size);
+        thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[2].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
+        thrust::raw_pointer_cast(average_state.tmp1.data()), length, batch_size);
     handleError(cudaGetLastError());
     sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
-        thrust::raw_pointer_cast(subtraction_data2[0].data()),
-        thrust::raw_pointer_cast(subtraction_data2[1].data()),
-        thrust::raw_pointer_cast(subtraction_data2[2].data()),
-        thrust::raw_pointer_cast(subtraction_data2[3].data()),
-        thrust::raw_pointer_cast(tmp2.data()), length, batch_size);
+        thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
+        thrust::raw_pointer_cast(average_state.tmp2.data()), length, batch_size);
     handleError(cudaGetLastError());
-    // copy from tmp1 and tmp2 to host vectors
-    handleError(cudaMemcpy(h_tmp1.data(), thrust::raw_pointer_cast(tmp1.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
-    handleError(cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(tmp2.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    // Copy reduced averages to host vectors.
+    handleError(cudaMemcpy(h_tmp1.data(), thrust::raw_pointer_cast(average_state.tmp1.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    handleError(cudaMemcpy(h_tmp2.data(), thrust::raw_pointer_cast(average_state.tmp2.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return { h_tmp1, h_tmp2 };
 }
 
@@ -778,35 +779,35 @@ std::pair<stdvec_c, stdvec_c> dsp::getAverageField()
 std::pair<std::complex<float>, std::complex<float>> dsp::getS21()
 {
     synchronize();
-    const size_t n = subtraction_data1[0].size();
+    const size_t n = average_state.subtraction_data1[0].size();
     if (n == 0)
         return { std::complex<float>(0.f, 0.f), std::complex<float>(0.f, 0.f) };
 
-    this->handleError(cudaMemset(s21_sum1, 0, sizeof(float2)));
-    this->handleError(cudaMemset(s21_sum2, 0, sizeof(float2)));
+    this->handleError(cudaMemset(average_state.s21_sum1, 0, sizeof(float2)));
+    this->handleError(cudaMemset(average_state.s21_sum2, 0, sizeof(float2)));
 
     constexpr int threads = 256;
     int blocks = static_cast<int>((n + threads - 1) / threads);
     if (blocks > 1024) blocks = 1024;
 
     s21Reduce<<<blocks, threads>>>(
-        thrust::raw_pointer_cast(subtraction_data1[0].data()),
-        thrust::raw_pointer_cast(subtraction_data1[1].data()),
-        thrust::raw_pointer_cast(subtraction_data1[2].data()),
-        thrust::raw_pointer_cast(subtraction_data1[3].data()),
-        thrust::raw_pointer_cast(subtraction_data2[0].data()),
-        thrust::raw_pointer_cast(subtraction_data2[1].data()),
-        thrust::raw_pointer_cast(subtraction_data2[2].data()),
-        thrust::raw_pointer_cast(subtraction_data2[3].data()),
-        s21_sum1,
-        s21_sum2,
+        thrust::raw_pointer_cast(average_state.subtraction_data1[0].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[1].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[2].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data1[3].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[0].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[1].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[2].data()),
+        thrust::raw_pointer_cast(average_state.subtraction_data2[3].data()),
+        average_state.s21_sum1,
+        average_state.s21_sum2,
         n);
     this->handleError(cudaGetLastError());
 
     float2 h1{ 0.f, 0.f };
     float2 h2{ 0.f, 0.f };
-    this->handleError(cudaMemcpy(&h1, s21_sum1, sizeof(float2), cudaMemcpyDeviceToHost));
-    this->handleError(cudaMemcpy(&h2, s21_sum2, sizeof(float2), cudaMemcpyDeviceToHost));
+    this->handleError(cudaMemcpy(&h1, average_state.s21_sum1, sizeof(float2), cudaMemcpyDeviceToHost));
+    this->handleError(cudaMemcpy(&h2, average_state.s21_sum2, sizeof(float2), cudaMemcpyDeviceToHost));
 
     float inv_points = 1.0f / static_cast<float>(n);
     return {
@@ -822,15 +823,15 @@ hostvec_c dsp::getCrossPower()
     const int length = getResampledTraceLength();
     stdvec_c h_cross_power(length);
     sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
-        thrust::raw_pointer_cast(cross_power[0].data()),
-        thrust::raw_pointer_cast(cross_power[1].data()),
-        thrust::raw_pointer_cast(cross_power[2].data()),
-        thrust::raw_pointer_cast(cross_power[3].data()),
-        thrust::raw_pointer_cast(tmp_cross.data()),
+        thrust::raw_pointer_cast(all_state.cross_power[0].data()),
+        thrust::raw_pointer_cast(all_state.cross_power[1].data()),
+        thrust::raw_pointer_cast(all_state.cross_power[2].data()),
+        thrust::raw_pointer_cast(all_state.cross_power[3].data()),
+        thrust::raw_pointer_cast(all_state.tmp_cross.data()),
         length,
         batch_size);
     handleError(cudaGetLastError());
-    handleError(cudaMemcpy(h_cross_power.data(), thrust::raw_pointer_cast(tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    handleError(cudaMemcpy(h_cross_power.data(), thrust::raw_pointer_cast(all_state.tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return h_cross_power;
 }
 
@@ -841,28 +842,28 @@ hostvec_c dsp::getCrossSpectrum()
     const int length = getResampledTraceLength();
     stdvec_c h_cross_spectrum(length);
     sumTracesReduce<<<length, 256, 256 * sizeof(tcf)>>>(
-        thrust::raw_pointer_cast(cross_spectrum[0].data()),
-        thrust::raw_pointer_cast(cross_spectrum[1].data()),
-        thrust::raw_pointer_cast(cross_spectrum[2].data()),
-        thrust::raw_pointer_cast(cross_spectrum[3].data()),
-        thrust::raw_pointer_cast(tmp_cross.data()),
+        thrust::raw_pointer_cast(all_state.cross_spectrum[0].data()),
+        thrust::raw_pointer_cast(all_state.cross_spectrum[1].data()),
+        thrust::raw_pointer_cast(all_state.cross_spectrum[2].data()),
+        thrust::raw_pointer_cast(all_state.cross_spectrum[3].data()),
+        thrust::raw_pointer_cast(all_state.tmp_cross.data()),
         length,
         batch_size);
     handleError(cudaGetLastError());
-    handleError(cudaMemcpy(h_cross_spectrum.data(), thrust::raw_pointer_cast(tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
+    handleError(cudaMemcpy(h_cross_spectrum.data(), thrust::raw_pointer_cast(all_state.tmp_cross.data()), length * sizeof(tcf), cudaMemcpyDeviceToHost));
     return h_cross_spectrum;
 }
 
 std::vector<hostvec_c> dsp::getCumulativeSubtrData()
 {
     std::vector<hostvec_c> subtr_data;
-    gpuvec_c f1(subtraction_data1[0].size(), tcf(0));
-    gpuvec_c f2(subtraction_data2[0].size(), tcf(0));
+    gpuvec_c f1(average_state.subtraction_data1[0].size(), tcf(0));
+    gpuvec_c f2(average_state.subtraction_data2[0].size(), tcf(0));
     synchronize();
     for (int i = 0; i < num_streams; i++)
     {
-        thrust::transform(subtraction_data1[i].begin(), subtraction_data1[i].end(), f1.begin(), f1.begin(), thrust::plus<tcf>());
-        thrust::transform(subtraction_data2[i].begin(), subtraction_data2[i].end(), f2.begin(), f2.begin(), thrust::plus<tcf>());
+        thrust::transform(average_state.subtraction_data1[i].begin(), average_state.subtraction_data1[i].end(), f1.begin(), f1.begin(), thrust::plus<tcf>());
+        thrust::transform(average_state.subtraction_data2[i].begin(), average_state.subtraction_data2[i].end(), f2.begin(), f2.begin(), thrust::plus<tcf>());
     }
 
     hostvec_c s1 = f1;
@@ -898,21 +899,21 @@ void dsp::setAmplitude(int ampl)
 
 void dsp::setSubtractionTrace(hostvec_c trace[num_channels])
 {
-    subtraction_trace1 = trace[0];
-    subtraction_trace2 = trace[1];
+    average_state.subtraction_trace1 = trace[0];
+    average_state.subtraction_trace2 = trace[1];
 }
 
 void dsp::getSubtractionTrace(std::vector<stdvec_c>& trace)
 {
     synchronize();
-    hostvec_c h_subtr_trace1 = subtraction_trace1;
-    hostvec_c h_subtr_trace2 = subtraction_trace2;
+    hostvec_c h_subtr_trace1 = average_state.subtraction_trace1;
+    hostvec_c h_subtr_trace2 = average_state.subtraction_trace2;
     trace.push_back(stdvec_c(h_subtr_trace1.begin(), h_subtr_trace1.end()));
     trace.push_back(stdvec_c(h_subtr_trace2.begin(), h_subtr_trace2.end()));
 }
 
 void dsp::resetSubtractionTrace()
 {
-    thrust::fill(subtraction_trace1.begin(), subtraction_trace1.end(), tcf(0));
-    thrust::fill(subtraction_trace2.begin(), subtraction_trace2.end(), tcf(0));
+    thrust::fill(average_state.subtraction_trace1.begin(), average_state.subtraction_trace1.end(), tcf(0));
+    thrust::fill(average_state.subtraction_trace2.begin(), average_state.subtraction_trace2.end(), tcf(0));
 }

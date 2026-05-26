@@ -482,7 +482,7 @@ Modernization target:
 - Prefer `complex64` unless analysis genuinely requires `complex128`.
 - For very large correlators, consider chunked result transfer or HDF5 direct writing.
 
-Dev branch update: the nested G1/G1-other Python-facing matrix type has been narrowed from `std::complex<double>` to `std::complex<float>`, matching the CUDA `thrust::complex<float>` accumulators and avoiding an unnecessary precision widening. The getters still return nested C++ vectors, so direct NumPy array return remains a later API modernization step.
+Dev branch update: the nested G1/G1-other Python-facing matrix type has been narrowed from `std::complex<double>` to `std::complex<float>`, matching the CUDA `thrust::complex<float>` accumulators and avoiding an unnecessary precision widening. New pybind array getters now return NumPy-compatible `complex64` arrays directly while keeping the existing list/nested-list getters for compatibility.
 
 ### 8.10 Input Validation Is Thin
 
@@ -1329,7 +1329,7 @@ Native repository:
 Path: /Users/vvvoskr/Projects/G2_measurement
 Branch: dev
 Remote: git@github.com:andrey-vasenin/G2_measurement.git
-Current relevant baseline: 9b8cdfd Document native module handoff state
+Baseline before this mode-state/NumPy-getter update: 8dffc85 Use RAII for measurement resources
 ```
 
 Important recent dev-branch changes:
@@ -1342,6 +1342,11 @@ Important recent dev-branch changes:
 - Python-facing G1 matrices now use `std::complex<float>` instead of `std::complex<double>`.
 - The old `part` constructor parameter was removed. The full Spectrum segment is now the raw trace length.
 - Native `result_mode` was added to make output allocation and compute work explicit.
+- DSP state is now grouped by mode responsibility:
+  - `AverageState` for Spectrum input buffers, two complex fields, resampled fields, subtraction traces/data, average-field scratch buffers, and S21 scalar accumulators.
+  - `G1State` for the main G1 conjugate buffer, G1 accumulator, and cuBLAS handles.
+  - `AllCorrelatorState` for the second conjugate buffer, G1-other accumulators, cross-power/cross-spectrum accumulators, shared cross-correlation scratch buffer, and correlation FFT plans.
+- Direct pybind NumPy array getters were added for the current outputs. They return `complex64` arrays and release the GIL while the native result copy/reduction runs.
 - Native constructor/setter validation now rejects unsupported `second_oversampling`, zero batch/segment/averages, non-divisible `segment % second_oversampling`, invalid digitizer oversampling, `averages % batch != 0`, malformed custom FIR/test/subtraction arrays, invalid calibration channel indexes, and `measure()` calls without a digitizer handle.
 - The first legacy-code cleanup pass removed stale central-peak/correlation-filter APIs, commented pybind G2/G1-filter/interference bindings, stale manual `main.cpp` calls, and unused DSP buffers/functions that were only referenced by commented-out paths. Correlation-downconversion coefficients are now allocated lazily only if the compatibility setter is called. The GEMM-based G2 helper remains in `dsp` for future explicit G2 workflow work.
 
@@ -1349,7 +1354,7 @@ Validation state:
 
 - Earlier commits up through the getter synchronization and `part` removal passed MeasurementPC tests.
 - The `result_mode` commit passed MeasurementPC CUDA build/runtime validation with `cmake --build --preset windows-qom-smoke-all --verbose`; the reported smoke output covered `second_oversampling = 1, 2, 4` and `result_mode = average, average_g1, all_correlators`.
-- The current validation/legacy-cleanup commit should be tested on MeasurementPC with the same `windows-qom-smoke-all` preset. The smoke script now also checks invalid constructor inputs and invalid setter calls.
+- The current mode-state/NumPy-getter commit should be tested on MeasurementPC with the same `windows-qom-smoke-all` preset. The smoke script now also checks invalid constructor inputs, invalid setter calls, direct NumPy getter availability by `result_mode`, array shapes, and `complex64` dtypes.
 
 ### 23.2 Current Public Pybind Contract
 
@@ -1412,6 +1417,19 @@ get_subtraction_data()
 get_subtraction_trace()
 ```
 
+Direct NumPy array getters:
+
+```python
+get_average_field_array()           # complex64, shape (2, resampled_trace_length)
+get_s21_array()                     # complex64, shape (2,)
+get_g1_correlator_array()           # complex64, shape (resampled_trace_length, resampled_trace_length)
+get_g1_other_correlators_array()    # complex64, shape (3, resampled_trace_length, resampled_trace_length)
+get_cross_power_array()             # complex64, shape (resampled_trace_length,)
+get_cross_spectrum_array()          # complex64, shape (resampled_trace_length,)
+get_subtraction_data_array()        # complex64, shape (2, resampled_trace_length * batch)
+get_subtraction_trace_array()       # complex64, shape (2, resampled_trace_length * batch)
+```
+
 Getters for disabled outputs now throw a clear `result_mode` error. Python code should not call heavy-output getters unless the measurer was constructed with a mode that enables them.
 
 ### 23.3 Result Modes and Output Availability
@@ -1434,9 +1452,13 @@ Getters for disabled outputs now throw a clear `result_mode` error. Python code 
   - correlation FFT plans.
 - Valid getters:
   - `get_average_field()`
+  - `get_average_field_array()`
   - `get_s21()`
+  - `get_s21_array()`
   - `get_subtraction_data()`
+  - `get_subtraction_data_array()`
   - `get_subtraction_trace()`
+  - `get_subtraction_trace_array()`
 
 `result_mode="average_g1"`:
 
@@ -1448,10 +1470,14 @@ Getters for disabled outputs now throw a clear `result_mode` error. Python code 
   - main `g1` matrix accumulator.
 - Valid getters in addition to `average` mode:
   - `get_g1_correlator()`
+  - `get_g1_correlator_array()`
 - Invalid in this mode:
   - `get_g1_other_correlators()`
+  - `get_g1_other_correlators_array()`
   - `get_cross_power()`
+  - `get_cross_power_array()`
   - `get_cross_spectrum()`
+  - `get_cross_spectrum_array()`
 
 `result_mode="all_correlators"`:
 
@@ -1554,41 +1580,33 @@ Completed in the current native cleanup pass:
 - Legacy native surface cleanup removed stale central-peak/correlation-filter methods and commented pybind G2/G1-filter/interference bindings.
 - `main.cpp` is no longer a stale experiment harness that calls removed APIs; the active build/test path remains the pybind module and CMake smoke targets.
 - `Measurement` now owns its `Digitizer` wrapper and `dsp` processor with `std::unique_ptr`; `free()` is idempotent and post-free method calls throw explicit errors.
+- `dsp` state is split into `AverageState`, `G1State`, and `AllCorrelatorState`, so future 2-physical-channel mode and live snapshot paths can be added without spreading mode checks across unrelated buffers.
+- Pybind now exposes direct `complex64` NumPy getters for average field, S21, main G1, G1-other, cross-power, cross-spectrum, subtraction data, and subtraction trace. Existing getters remain available for compatibility.
 
 Recommended next native changes, in order:
 
-1. Split mode-specific DSP responsibilities.
-   - Keep the public `result_mode` API stable.
-   - Internally separate always-needed average/S21 state from G1 and all-correlator state.
-   - This can be done with helper structs before larger class splitting:
-     - `AverageState`
-     - `G1State`
-     - `AllCorrelatorState`
-
-2. Clarify `Digitizer` handle ownership.
+1. Clarify `Digitizer` handle ownership.
    - The pybind `from_handle` path should continue to treat the Spectrum handle as borrowed.
    - If the native address-opening constructor is kept, set and test `created_here = true` so it closes handles it opens.
 
-3. Implement native 2-physical-channel mode.
+2. Implement native 2-physical-channel mode.
    - Add a channel layout/config parameter separate from `result_mode`.
    - For 2 physical channels, form only one complex field from `[0, 1]`.
    - Allow only average-field/S21 style outputs in this mode.
    - Reject cross-channel G1/G2/cross-power requests clearly because there is no second complex field.
 
-4. Add intermediate snapshot/chunked measurement support.
+3. Add intermediate snapshot/chunked measurement support.
    - Add a method that processes a fixed number of batches without resetting output devices.
    - Expose processed averages/batches count to Python.
    - Keep relative phase stable by not restarting external signal devices between chunks.
    - For live plotting, prefer average field, S21, G1 diagonal, or small G1 ROI over full G1 matrix transfer.
 
-5. Return large arrays as NumPy buffers directly.
-   - Current nested-vector G1 conversion is still expensive.
-   - Add pybind `py::array_t<std::complex<float>>` returns for G1 and other large outputs.
-   - Keep the existing getters until wrapper migration is complete, or add new getters first:
-     - `get_g1_correlator_array()`
-     - `get_average_field_array()`
+4. Migrate `QO-measurements` wrappers/notebooks to the new NumPy getters.
+   - Prefer `get_average_field_array()`, `get_s21_array()`, and `get_g1_correlator_array()` for new plotting code.
+   - Keep compatibility conversion only for notebooks that still depend on nested Python sequences.
+   - Use `result_mode` checks before requesting heavy outputs.
 
-6. Reintroduce only the future G2 path that is actually needed.
+5. Reintroduce only the future G2 path that is actually needed.
    - Keep GEMM-based G2 as the preferred future implementation.
    - Do not restore multiple legacy G2 variants unless the experiment workflow requires them.
    - Put G2 behind a future explicit mode such as `result_mode="g2"` or `result_mode="all_correlators_g2"`.

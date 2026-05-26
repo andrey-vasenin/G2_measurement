@@ -375,6 +375,22 @@ std::tuple<corr_t, corr_t, corr_t> Measurement::getG1OtherCorrelators()
     };
 }
 
+stdvec_c Measurement::getG1CorrelatorFlat()
+{
+    auto corrs = requireProcessor().getG1Result();
+    return postprocess<tcf, output_complex_t>(corrs);
+}
+
+std::tuple<stdvec_c, stdvec_c, stdvec_c> Measurement::getG1OtherCorrelatorsFlat()
+{
+    auto [reordered_corrs, creation_corrs, annihilation_corrs] = requireProcessor().getG1OtherResults();
+    return {
+        postprocess<tcf, output_complex_t>(reordered_corrs),
+        postprocess<tcf, output_complex_t>(creation_corrs),
+        postprocess<tcf, output_complex_t>(annihilation_corrs)
+    };
+}
+
 std::pair<stdvec_c, stdvec_c> Measurement::getAverageField()
 {
     dsp &active_processor = requireProcessor();

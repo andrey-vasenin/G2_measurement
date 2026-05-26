@@ -88,6 +88,10 @@ public:
 
     std::tuple<corr_t, corr_t, corr_t> getG1OtherCorrelators();
 
+    stdvec_c getG1CorrelatorFlat();
+
+    std::tuple<stdvec_c, stdvec_c, stdvec_c> getG1OtherCorrelatorsFlat();
+
     std::pair<stdvec_c, stdvec_c> getAverageField();
 
     std::pair<std::complex<float>, std::complex<float>> getS21();

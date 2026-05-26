@@ -73,45 +73,58 @@ inline Npp32f *to_Npp32f_p(T *v)
     return reinterpret_cast<Npp32f *>(v);
 }
 
-class dsp
+struct AverageState
 {
-    /* Pointer */
-    hostbuf buffer;
-
-    /* Pointers to arrays with data */
-    gpubuf gpu_data_buf[num_streams];  // buffers for loading data
+    gpubuf gpu_data_buf[num_streams];
     gpuvec_c data1[num_streams];
     gpuvec_c data2[num_streams];
     gpuvec_c data1_resampled[num_streams];
-    gpuvec_c data1_resampled_conj[num_streams];
     gpuvec_c data2_resampled[num_streams];
-    gpuvec_c data2_resampled_conj[num_streams];
     gpuvec_c subtraction_data1[num_streams];
     gpuvec_c subtraction_data2[num_streams];
+    gpuvec_c subtraction_trace1;
+    gpuvec_c subtraction_trace2;
+    gpuvec_c tmp1;
+    gpuvec_c tmp2;
+    float2 *s21_sum1 = nullptr;
+    float2 *s21_sum2 = nullptr;
+};
+
+struct G1State
+{
+    gpuvec_c data2_resampled_conj[num_streams];
     gpuvec_c g1[num_streams];
+    cublasHandle_t cublas_handles[num_streams];
+};
+
+struct AllCorrelatorState
+{
+    gpuvec_c data1_resampled_conj[num_streams];
     gpuvec_c g1_annihilation[num_streams];
     gpuvec_c g1_creation[num_streams];
     gpuvec_c g1_reordered[num_streams];
     gpuvec_c cross_power[num_streams];
     gpuvec_c cross_spectrum[num_streams];
+    gpuvec_c tmp_cross;
+    cufftHandle corr_plans[num_streams];
+};
+
+class dsp
+{
+    /* Pointer */
+    hostbuf buffer;
+
+    AverageState average_state;
+    G1State g1_state;
+    AllCorrelatorState all_state;
 
     /* Filtering windows */
     gpuvec_c firwin;
-
-    /* Subtraction traces */
-    gpuvec_c subtraction_trace1;
-    gpuvec_c subtraction_trace2;
 
     /* Downconversion coefficients */
     gpuvec_c downconversion_coeffs;
     gpuvec_c corr_downconversion_coeffs1;
     gpuvec_c corr_downconversion_coeffs2;
-
-    gpuvec_c tmp1, tmp2, tmp_cross;
-
-    // Device-side accumulators for fast scalar reductions (e.g., S21)
-    float2* s21_sum1 = nullptr;
-    float2* s21_sum2 = nullptr;
 
 private:
     /* Useful variables */
@@ -138,10 +151,6 @@ private:
 
     /* cuFFT required variables */
     cufftHandle plans[num_streams];
-    cufftHandle corr_plans[num_streams];
-
-    /* cuBLAS required variables */
-    cublasHandle_t cublas_handles[num_streams];
 
     /* NVIDIA Performance Primitives required variables */
     NppStreamContext streamContexts[num_streams];
