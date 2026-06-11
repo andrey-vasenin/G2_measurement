@@ -168,6 +168,16 @@ def _run_invalid_setter_cases(module) -> None:
         _assert_runtime_error(lambda: measurer.set_firwin([1.0 + 0.0j] * 15), "bad FIR length", "firwin")
         _assert_runtime_error(lambda: measurer.set_test_input([0] * 63), "bad test input length", "test_input")
         _assert_runtime_error(lambda: measurer.set_subtraction_trace([[0.0 + 0.0j] * 16]), "bad subtraction trace count", "subtraction_trace")
+        _assert_runtime_error(
+            lambda: measurer.set_subtraction_trace_array(np.zeros((1, 16), dtype=np.complex64)),
+            "bad subtraction trace array field count",
+            "subtraction_trace",
+        )
+        _assert_runtime_error(
+            lambda: measurer.set_subtraction_trace_array(np.zeros((2, 15), dtype=np.complex64)),
+            "bad subtraction trace array length",
+            "subtraction_trace",
+        )
         _assert_runtime_error(measurer.measure, "measure without digitizer", "digitizer")
         _assert_runtime_error(measurer.start_fifo, "start_fifo without digitizer", "digitizer")
         _assert_runtime_error(lambda: measurer.measure_batches(2), "too many hardware batches", "remaining")
@@ -188,6 +198,11 @@ def _run_invalid_setter_cases(module) -> None:
         _assert_runtime_error(lambda: one_field.set_calibration(1, 1.0, 0.0, 0.0, 0.0), "bad one-complex calibration channel", "line_num")
         _assert_runtime_error(lambda: one_field.set_test_input([0] * 63), "bad one-complex test input length", "test_input")
         _assert_runtime_error(lambda: one_field.set_subtraction_trace([[0.0 + 0.0j] * 15]), "bad one-complex subtraction trace length", "subtraction_trace")
+        _assert_runtime_error(
+            lambda: one_field.set_subtraction_trace_array(np.zeros((1, 15), dtype=np.complex64)),
+            "bad one-complex subtraction trace array length",
+            "subtraction_trace",
+        )
     finally:
         one_field.free()
     print("invalid setter checks passed")
@@ -358,6 +373,45 @@ def _run_case(
                 raise AssertionError(f"subtraction_trace[{idx}] returned an unexpected length")
             _assert_finite(trace, f"subtraction_trace[{idx}]")
         _assert_complex64_array(measurer.get_subtraction_trace_array(), (complex_fields, out_len * batch), "subtraction_trace_array")
+
+        # Tiled-array subtraction fast path (the Mollow-triplet two-stage
+        # contract): store the measured average field as the per-segment
+        # template, reset outputs (which must KEEP the subtraction trace),
+        # re-measure the identical synthetic input, and require the residual
+        # average field (and g1, when enabled) to vanish.
+        measurer.set_subtraction_trace_array(average_array)
+        stored = _assert_complex64_array(
+            measurer.get_subtraction_trace_array(),
+            (complex_fields, out_len * batch),
+            "tiled_subtraction_trace_array",
+        )
+        expected_tiled = np.tile(average_array, (1, batch))
+        template_scale = max(1.0, float(np.abs(average_array).max()))
+        if float(np.abs(stored - expected_tiled).max()) > tol * template_scale:
+            raise AssertionError("tiled subtraction trace does not match the template")
+        measurer.reset_output()
+        measurer.measure_test()
+        residual = _assert_complex64_array(
+            measurer.get_average_field_array(),
+            (complex_fields, out_len),
+            "residual_average_field_array",
+        )
+        if float(np.abs(residual).max()) > tol * template_scale:
+            raise AssertionError(
+                "average-field residual after tiled subtraction is not ~0: "
+                f"max |residual| = {float(np.abs(residual).max()):g}"
+            )
+        if result_mode in ("average_g1", "all_correlators"):
+            g1_residual = _assert_complex64_array(
+                measurer.get_g1_correlator_array(),
+                (out_len, out_len),
+                "g1_residual_array",
+            )
+            if float(np.abs(g1_residual).max()) > tol * template_scale * template_scale:
+                raise AssertionError(
+                    "g1 residual after tiled subtraction is not ~0: "
+                    f"max |g1| = {float(np.abs(g1_residual).max()):g}"
+                )
     finally:
         measurer.free()
 

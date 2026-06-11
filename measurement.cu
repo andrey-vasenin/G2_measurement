@@ -557,6 +557,24 @@ void Measurement::setSubtractionTrace(std::vector<stdvec_c> trace)
     active_processor.setSubtractionTrace(average);
 }
 
+// Accepts one resampled-trace-length template per complex field and tiles it
+// across the batch natively (the subtraction buffer layout is batch x trace).
+// This is the fast path for Python callers: they pass (fields, R) instead of
+// materializing (fields, R * batch) through per-element pybind conversion.
+void Measurement::setSubtractionTraceTiled(std::vector<stdvec_c> traces)
+{
+    validateSizeEquals(traces.size(), static_cast<size_t>(complex_fields), "subtraction_trace");
+    dsp &active_processor = requireProcessor();
+    const size_t trace_len = static_cast<size_t>(active_processor.getResampledTraceLength());
+    hostvec_c average[num_channels];
+    for (int i = 0; i < complex_fields; i++)
+    {
+        validateSizeEquals(traces[i].size(), trace_len, "subtraction_trace channel");
+        average[i] = tile(traces[i], static_cast<size_t>(batch_size));
+    }
+    active_processor.setSubtractionTrace(average);
+}
+
 // returns newly received data and saved like average_data 
 std::vector<stdvec_c> Measurement::getSubtractionData()
 {

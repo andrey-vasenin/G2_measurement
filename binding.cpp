@@ -175,6 +175,26 @@ PYBIND11_MODULE(AverageField, m)
         .def("measure_test_batches", &Measurement::measureTestBatches, output_and_gil_guard())
         .def("set_test_input", &Measurement::setTestInput, output_and_gil_guard())
         .def("set_subtraction_trace", &Measurement::setSubtractionTrace, output_and_gil_guard())
+        .def("set_subtraction_trace_array", [](Measurement &measurement,
+                                               py::array_t<output_complex_t, py::array::c_style | py::array::forcecast> traces)
+        {
+            if (traces.ndim() != 2)
+                throw std::invalid_argument(
+                    "subtraction trace array must have shape "
+                    "(complex_field_count, resampled_trace_length)");
+            const py::ssize_t fields = traces.shape(0);
+            const py::ssize_t length = traces.shape(1);
+            std::vector<stdvec_c> rows(static_cast<size_t>(fields));
+            const output_complex_t *data = traces.data();
+            for (py::ssize_t i = 0; i < fields; i++)
+            {
+                rows[static_cast<size_t>(i)].assign(
+                    data + i * length, data + (i + 1) * length);
+            }
+            py::gil_scoped_release release;
+            measurement.setSubtractionTraceTiled(std::move(rows));
+        }, "Set per-segment subtraction traces from a (complex_field_count, resampled_trace_length) "
+           "complex64 array; tiled across the batch natively")
         .def("get_subtraction_trace", &Measurement::getSubtractionTrace, output_and_gil_guard())
         .def("get_subtraction_trace_array", [](Measurement &measurement)
         {

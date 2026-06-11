@@ -122,6 +122,8 @@ public:
 
     void setSubtractionTrace(std::vector<stdvec_c> trace);
 
+    void setSubtractionTraceTiled(std::vector<stdvec_c> traces);
+
     std::vector<stdvec_c> getSubtractionTrace();
 
     int getTotalLength() { return requireProcessor().getTotalLength(); }
